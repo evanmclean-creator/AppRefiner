@@ -57,6 +57,7 @@ namespace AppRefiner
         public int SelectionEnd { get; set; } = -1;
         public int LastMatchPosition { get; set; } = -1;
         public int LastSearchFlags { get; set; } = 0;
+        public bool LastSearchForward { get; set; } = true;
 
         // Search history (limited to last 10 searches)
         public List<string> SearchHistory { get; set; } = new();

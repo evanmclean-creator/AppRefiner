@@ -157,6 +157,12 @@
     <ClInclude Include="Scintilla.h" />
     <ClInclude Include="Sci_position.h" />
     <ClInclude Include="ScintillaUtils.h" />
+    <ClInclude Include="Vim\VimCommand.h" />
+    <ClInclude Include="Vim\VimLineNumbers.h" />
+    <ClInclude Include="Vim\VimMotion.h" />
+    <ClInclude Include="Vim\VimMode.h" />
+    <ClInclude Include="Vim\VimKeymap.h" />
+    <ClInclude Include="Vim\VimOperator.h" />
   </ItemGroup>
   <ItemGroup>
     <ClCompile Include="AutoIndent.cpp" />
@@ -168,6 +174,12 @@
     <ClCompile Include="MinimapManager.cpp" />
     <ClCompile Include="MinimapOverlay.cpp" />
     <ClCompile Include="ScintillaUtils.cpp" />
+    <ClCompile Include="Vim\VimCommand.cpp" />
+    <ClCompile Include="Vim\VimLineNumbers.cpp" />
+    <ClCompile Include="Vim\VimMotion.cpp" />
+    <ClCompile Include="Vim\VimMode.cpp" />
+    <ClCompile Include="Vim\VimKeymap.cpp" />
+    <ClCompile Include="Vim\VimOperator.cpp" />
   </ItemGroup>
   <ItemGroup>
     <Text Include="License.txt" />

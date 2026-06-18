@@ -2,7 +2,10 @@
 #include "MinimapOverlay.h"
 #include "MinimapManager.h"
 #include "ComboBoxButton.h"
+#include "Vim/VimMode.h"
+#include "Vim/VimLineNumbers.h"
 #include <winver.h>  // For version info APIs (GetFileVersionInfo, etc.)
+#include <algorithm>
 
 #pragma comment(lib, "version.lib")  // Link version.lib for file version APIs
 
@@ -11,6 +14,7 @@ HHOOK g_getMsgHook = NULL;
 HHOOK g_keyboardHook = NULL;
 HMODULE g_hModule = NULL;
 bool g_enableAutoPairing = false;  // Flag to control auto-pairing feature
+bool g_enableVimMode = false;      // Flag to control Vim modal editing
 unsigned int g_enabledShortcuts = SHORTCUT_NONE;  // Bit field to control which shortcuts are enabled
 HWND g_lastEditorHwnd = NULL;      // Track the last editor HWND that received SCN_CHARADDED
 HMODULE g_dllSelfReference = NULL; // Self-reference to prevent DLL unloading
@@ -484,6 +488,10 @@ void HandleScintillaNotification(HWND hwnd, SCNotification* scn, HWND callbackWi
                 // Notify EditorManager about cursor position change event
                 EditorManager::HandleCursorPositionChangeEvent(hwnd, callbackWindow);
             }
+            // Refresh hybrid line numbers on any cursor or scroll change.
+            if (g_enableVimMode && (scn->updated & (SC_UPDATE_SELECTION | SC_UPDATE_V_SCROLL))) {
+                VimLineNumbers::Update(hwnd);
+            }
             InvalidateMinimapForScintilla(hwnd);
         }
     }
@@ -658,6 +666,7 @@ LRESULT CALLBACK ScintillaSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
     try {
         // Handle WM_NCDESTROY message to remove subclassing
         if (uMsg == WM_NCDESTROY) {
+            RemoveVimEditorState(hWnd);
             RemoveWindowSubclass(hWnd, ScintillaSubclassProc, SCINTILLA_SUBCLASS_ID);
             return DefSubclassProc(hWnd, uMsg, wParam, lParam);
         }
@@ -694,21 +703,59 @@ LRESULT CALLBACK ScintillaSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
 
         // Handle escape key on WM_KEYUP to dismiss UserList and CallTips
         if (uMsg == WM_KEYUP && wParam == VK_ESCAPE) {
-            // Check if autocomplete or call tip is active
+            // If Vim has an active colon/search prompt, let the Vim handler below
+            // process Escape instead. The prompt is shown as a call tip, so the
+            // generic dismiss here would only hide it and leave colonPending /
+            // searchPending set (App Designer eats the WM_KEYDOWN, so this keyup
+            // is the only delivery the Vim handler ever sees).
+            bool vimPromptActive = false;
+            if (g_enableVimMode) {
+                VimEditorState& vimEsc = GetVimEditorState(hWnd);
+                vimPromptActive = vimEsc.colonPending || vimEsc.searchPending;
+            }
+
+            if (!vimPromptActive) {
+                // Check if autocomplete or call tip is active
+                LRESULT autoActive = SendMessage(hWnd, SCI_AUTOCACTIVE, 0, 0);
+                LRESULT callTipActive = SendMessage(hWnd, SCI_CALLTIPACTIVE, 0, 0);
+
+                if (autoActive || callTipActive) {
+                    // Cancel both if active (handles edge case of both being active)
+                    if (autoActive) {
+                        SendMessage(hWnd, SCI_AUTOCCANCEL, 0, 0);
+                    }
+                    if (callTipActive) {
+                        SendMessage(hWnd, SCI_CALLTIPCANCEL, 0, 0);
+                    }
+
+                    // Return 0 to prevent Esc from propagating
+                    return 0;
+                }
+            }
+        }
+
+        bool isVimEscapeKeyUp = (uMsg == WM_KEYUP && wParam == VK_ESCAPE);
+        // Ctrl-only WM_KEYUP is routed to the Vim handler so Ctrl chords (r=redo,
+        // d/u=half-page, e/y=scroll, b=page-back) work even when Application Designer's
+        // TranslateAccelerator eats the corresponding WM_KEYDOWN.
+        bool isVimCtrlKeyUp  = (uMsg == WM_KEYUP) &&
+                               ((GetKeyState(VK_CONTROL) & 0x8000) != 0) &&
+                               ((GetKeyState(VK_SHIFT)   & 0x8000) == 0) &&
+                               ((GetKeyState(VK_MENU)    & 0x8000) == 0);
+        bool isVimKeyMessage = (uMsg == WM_KEYDOWN || uMsg == WM_SYSKEYDOWN || uMsg == WM_CHAR || isVimEscapeKeyUp || isVimCtrlKeyUp);
+        if (g_enableVimMode && isVimKeyMessage) {
             LRESULT autoActive = SendMessage(hWnd, SCI_AUTOCACTIVE, 0, 0);
-            LRESULT callTipActive = SendMessage(hWnd, SCI_CALLTIPACTIVE, 0, 0);
+            // Autocomplete popups need to keep first claim on keystrokes so typing can
+            // continue filtering / selecting completions. Call tips are passive display;
+            // if Vim stands down while one is visible, Normal-mode keys fall through and
+            // get inserted into the buffer, which breaks operator sequences like dw/diw.
+            if (!autoActive) {
+                VimEditorState& vimState = GetVimEditorState(hWnd);
+                EnsureVimCaretInitialized(hWnd, vimState);
 
-            if (autoActive || callTipActive) {
-                // Cancel both if active (handles edge case of both being active)
-                if (autoActive) {
-                    SendMessage(hWnd, SCI_AUTOCCANCEL, 0, 0);
+                if (HandleVimEditorMessage(hWnd, uMsg, wParam, lParam, vimState)) {
+                    return 0;
                 }
-                if (callTipActive) {
-                    SendMessage(hWnd, SCI_CALLTIPCANCEL, 0, 0);
-                }
-
-                // Return 0 to prevent Esc from propagating
-                return 0;
             }
         }
 
@@ -718,19 +765,31 @@ LRESULT CALLBACK ScintillaSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPAR
             bool hasCtrl = (GetKeyState(VK_CONTROL) & 0x8000) != 0;
             bool hasShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
             bool hasAlt = (GetKeyState(VK_MENU) & 0x8000) != 0;
-            
+
             // Only forward if at least one modifier key is pressed
             if (hasCtrl || hasShift || hasAlt) {
-                // Pack modifier flags into high word of wParam, virtual key code in low word
-                WPARAM modifierFlags = 0;
-                if (hasCtrl) modifierFlags |= 0x10000;  // Ctrl = bit 16
-                if (hasShift) modifierFlags |= 0x20000; // Shift = bit 17
-                if (hasAlt) modifierFlags |= 0x40000;   // Alt = bit 18
-                
-                WPARAM combinedParam = modifierFlags | (wParam & 0xFFFF);
-                
-                // Forward the key combination to C# application
-                SendMessage(callbackWindow, WM_AR_KEY_COMBINATION, combinedParam, 0);
+                // In Vim Normal mode, Ctrl-only chords belong to Vim (e.g. Ctrl+r = redo,
+                // Ctrl+d/u = half-page, Ctrl+e/y = scroll). Suppress WM_AR_KEY_COMBINATION
+                // for those so AppRefiner shortcuts don't fire on top of the Vim action.
+                // Ctrl+Shift and Ctrl+Alt combos (e.g. Ctrl+Shift+P) are still forwarded.
+                bool suppressedByVim = false;
+                if (g_enableVimMode && hasCtrl && !hasShift && !hasAlt) {
+                    VimEditorState& vimState = GetVimEditorState(hWnd);
+                    if (vimState.mode == VimMode::Normal) {
+                        suppressedByVim = true;
+                    }
+                }
+
+                if (!suppressedByVim) {
+                    // Pack modifier flags into high word of wParam, virtual key code in low word
+                    WPARAM modifierFlags = 0;
+                    if (hasCtrl) modifierFlags |= 0x10000;  // Ctrl = bit 16
+                    if (hasShift) modifierFlags |= 0x20000; // Shift = bit 17
+                    if (hasAlt) modifierFlags |= 0x40000;   // Alt = bit 18
+
+                    WPARAM combinedParam = modifierFlags | (wParam & 0xFFFF);
+                    SendMessage(callbackWindow, WM_AR_KEY_COMBINATION, combinedParam, 0);
+                }
             }
         }
     }
@@ -814,6 +873,19 @@ LRESULT CALLBACK MainWindowSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LPA
             sprintf_s(debugMsg, "Auto-pairing %s\n", g_enableAutoPairing ? "enabled" : "disabled");
             OutputDebugStringA(debugMsg);
             
+            // Return 1 to indicate success
+            return 1;
+        }
+
+        // Handle WM_AR_TOGGLE_VIM message for toggling Vim modal editing
+        if (uMsg == WM_AR_TOGGLE_VIM) {
+            g_enableVimMode = (wParam != 0);
+            SetVimEnabledForKnownEditors(g_enableVimMode);
+
+            char debugMsg[100];
+            sprintf_s(debugMsg, "Vim mode %s\n", g_enableVimMode ? "enabled" : "disabled");
+            OutputDebugStringA(debugMsg);
+
             // Return 1 to indicate success
             return 1;
         }
@@ -953,7 +1025,7 @@ LRESULT CALLBACK ResultsListSubclassProc(HWND hWnd, UINT uMsg, WPARAM wParam, LP
                     int bufferLength = wcslen(g_openTargetBuffer);
                     
                     // Copy up to min(bufferLength, cchTextMax - 1) characters
-                    int copyLength = min(bufferLength, lvItem->cchTextMax - 1);
+                    int copyLength = std::min(bufferLength, lvItem->cchTextMax - 1);
                     
                     if (copyLength > 0 && lvItem->pszText) {
                         wcsncpy_s(lvItem->pszText, lvItem->cchTextMax, g_openTargetBuffer, copyLength);
@@ -1142,6 +1214,24 @@ LRESULT CALLBACK GetMsgHook(int nCode, WPARAM wParam, LPARAM lParam) {
             return CallNextHookEx(g_getMsgHook, nCode, wParam, lParam);
         }
 
+        // Suppress Ctrl+D/U/E/Y/B WM_KEYDOWN for Vim Normal mode editors.
+        // We must act here — before TranslateAccelerator runs — because App Designer maps
+        // Ctrl+D to "duplicate line" in its accelerator table.  TranslateAccelerator fires
+        // that command synchronously and the WM_KEYDOWN is never dispatched to Scintilla, so
+        // subclass-level suppression is too late.  We handle those chords on WM_KEYUP instead.
+        if (g_enableVimMode && msg->message == WM_KEYDOWN && msg->hwnd && IsWindow(msg->hwnd)) {
+            const bool ctrlOnly = (GetKeyState(VK_CONTROL) & 0x8000) != 0 &&
+                                  (GetKeyState(VK_SHIFT)   & 0x8000) == 0 &&
+                                  (GetKeyState(VK_MENU)    & 0x8000) == 0;
+            if (ctrlOnly) {
+                WPARAM vk = msg->wParam;
+                if ((vk == 'D' || vk == 'U' || vk == 'E' || vk == 'Y' || vk == 'B') &&
+                    IsVimNormalModeEditor(msg->hwnd)) {
+                    msg->message = WM_NULL;
+                }
+            }
+        }
+
         // Check if this is our message to subclass a window
         if (msg->message == WM_SUBCLASS_SCINTILLA_PARENT_WINDOW) {
             HWND hWndToSubclass = (HWND)msg->wParam;
@@ -1156,6 +1246,10 @@ LRESULT CALLBACK GetMsgHook(int nCode, WPARAM wParam, LPARAM lParam) {
                 ComboBoxButton::Setup(scintillaChild, callbackWindow);
                 if (scintillaChild && IsWindow(scintillaChild)) {
                     SetWindowSubclass(scintillaChild, ScintillaSubclassProc, SCINTILLA_SUBCLASS_ID, (DWORD_PTR)callbackWindow);
+                    VimEditorState& vimState = GetVimEditorState(scintillaChild);
+                    if (g_enableVimMode) {
+                        EnsureVimCaretInitialized(scintillaChild, vimState);
+                    }
                 } else {
                     // If direct child search fails, try recursive search
                     struct FindScintillaData {
@@ -1177,6 +1271,10 @@ LRESULT CALLBACK GetMsgHook(int nCode, WPARAM wParam, LPARAM lParam) {
                     
                     if (findData.scintillaHwnd && IsWindow(findData.scintillaHwnd)) {
                         SetWindowSubclass(findData.scintillaHwnd, ScintillaSubclassProc, SCINTILLA_SUBCLASS_ID, (DWORD_PTR)callbackWindow);
+                        VimEditorState& vimState = GetVimEditorState(findData.scintillaHwnd);
+                        if (g_enableVimMode) {
+                            EnsureVimCaretInitialized(findData.scintillaHwnd, vimState);
+                        }
                     }
                 }
 
@@ -1331,7 +1429,7 @@ LRESULT CALLBACK GetMsgHook(int nCode, WPARAM wParam, LPARAM lParam) {
                 // Construct final DLL path: <directory>\<version>\<DLL name>
                 // First, copy the directory path and ensure it ends with a backslash
                 wcsncpy_s(finalDllPath, MAX_PATH, dllPath, charCount);
-                finalDllPath[min(charCount, MAX_PATH - 1)] = L'\0';
+                finalDllPath[std::min(charCount, MAX_PATH - 1)] = L'\0';
 
                 // Add trailing backslash if not present
                 size_t len = wcslen(finalDllPath);
@@ -1443,7 +1541,7 @@ LRESULT CALLBACK GetMsgHook(int nCode, WPARAM wParam, LPARAM lParam) {
 
                 // Use the provided path directly (assume it's already complete or has default structure)
                 wcsncpy_s(finalDllPath, MAX_PATH, dllPath, charCount);
-                finalDllPath[min(charCount, MAX_PATH - 1)] = L'\0';
+                finalDllPath[std::min(charCount, MAX_PATH - 1)] = L'\0';
             }
 
             // Debug log the final path

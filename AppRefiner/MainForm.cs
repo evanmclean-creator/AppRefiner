@@ -125,6 +125,22 @@ namespace AppRefiner
         public const int AR_FUNCTION_CALL_TIP = 2511; // Function call tip notification for '(', ')', and ',' characters
         private const int AR_OBJECT_MEMBERS = 2512; // Object member suggestions when '.' is typed
         private const int AR_SYSTEM_VARIABLE_SUGGEST = 2513; // System variable suggestions when '%' is typed
+        private const int AR_VIM_SEARCH_BEGIN = 2521;
+        private const int AR_VIM_SEARCH_APPEND = 2522;
+        private const int AR_VIM_SEARCH_BACKSPACE = 2523;
+        private const int AR_VIM_SEARCH_CANCEL = 2524;
+        private const int AR_VIM_SEARCH_COMMIT = 2525;
+        private const int AR_VIM_SEARCH_NEXT = 2526;
+        private const int AR_VIM_SHOW_TOOLTIP = 2527;
+        private const int AR_VIM_CYCLE_EDITOR = 2528;
+        private const int AR_VIM_CMD_BEGIN     = 2529;
+        private const int AR_VIM_CMD_APPEND    = 2530;
+        private const int AR_VIM_CMD_BACKSPACE = 2531;
+        private const int AR_VIM_CMD_CANCEL    = 2532;
+        private const int AR_VIM_CMD_COMMIT    = 2533;
+        private const int AR_VIM_NOH           = 2534;
+        private const int WM_COPYDATA          = 0x004A;
+        private const uint VIM_DIALOG_COPYDATA = 0x56494D44u; // 'VIMD'
         private const int AR_SCINTILLA_ALREADY_LOADED = 2514; // Scintilla DLL is already loaded
         private const int AR_SCINTILLA_LOAD_SUCCESS = 2515; // Scintilla DLL loaded successfully
         private const int AR_SCINTILLA_LOAD_FAILED = 2516; // Scintilla DLL load failed (wParam contains GetLastError)
@@ -151,6 +167,8 @@ namespace AppRefiner
 
         // Fields for editor management
         private Dictionary<ScintillaEditor, DateTime> lastStylerProcessingTime = new();
+        private readonly Dictionary<IntPtr, (bool Forward, string Text)> vimSearchPrompts = new();
+        private readonly Dictionary<IntPtr, string> vimCmdPrompts = new();
         private const int STYLER_PROCESSING_DEBOUNCE_MS = 1000; // Prevent duplicate processing within 100ms
 
         // Throttling for duplicate shortcut prevention
@@ -222,6 +240,7 @@ namespace AppRefiner
             chkBetterSQL.Checked = generalSettings.BetterSQL;
             chkAutoDark.Checked = generalSettings.AutoDark;
             chkAutoPairing.Checked = generalSettings.AutoPair; // Assuming chkAutoPairing corresponds to AutoPair
+            chkVimMode.Checked = generalSettings.VimModeEnabled;
             chkPromptForDB.Checked = generalSettings.PromptForDB;
             lintReportPath = generalSettings.LintReportPath;
             TNS_ADMIN = generalSettings.TNS_ADMIN;
@@ -544,6 +563,7 @@ namespace AppRefiner
             chkBetterSQL.CheckedChanged += GeneralSetting_Changed;
             chkAutoDark.CheckedChanged += GeneralSetting_Changed;
             chkAutoPairing.CheckedChanged += GeneralSetting_Changed;
+            chkVimMode.CheckedChanged += GeneralSetting_Changed;
             chkPromptForDB.CheckedChanged += GeneralSetting_Changed;
             chkEventMapping.CheckedChanged += GeneralSetting_Changed;
             chkEventMapXrefs.CheckedChanged += GeneralSetting_Changed;
@@ -896,6 +916,7 @@ namespace AppRefiner
                 BetterSQL = chkBetterSQL.Checked,
                 AutoDark = chkAutoDark.Checked,
                 AutoPair = chkAutoPairing.Checked,
+                VimModeEnabled = chkVimMode.Checked,
                 PromptForDB = chkPromptForDB.Checked,
                 LintReportPath = lintReportPath,
                 TNS_ADMIN = TNS_ADMIN,
@@ -949,7 +970,10 @@ namespace AppRefiner
             // 4. Notify all hooked editors of auto-pairing setting changes
             NotifyAutoPairingChange(generalSettingsToSave.AutoPair);
 
-            // 5. Notify all hooked editors of multi-selection setting changes
+            // 5. Notify all hooked editors of Vim mode setting changes
+            NotifyVimModeChange(generalSettingsToSave.VimModeEnabled);
+
+            // 6. Notify all hooked editors of multi-selection setting changes
             NotifyMultiSelectionChange(generalSettingsToSave.MultiSelection);
         }
 
@@ -962,6 +986,38 @@ namespace AppRefiner
                 Debug.Log($"Set auto-pairing ({enabled}) for process {appDesigner.ProcessId}: {result}");
             }
 
+        }
+
+        // Method to notify all hooked editors of Vim mode setting changes
+        private void NotifyVimModeChange(bool enabled)
+        {
+            foreach (var appDesigner in AppDesignerProcesses.Values)
+            {
+                bool result = EventHookInstaller.SetVimMode(appDesigner.MainWindowHandle, enabled);
+                Debug.Log($"Set Vim mode ({enabled}) for process {appDesigner.ProcessId}: {result}");
+            }
+        }
+
+        public void SetVimModeEnabled(bool enabled)
+        {
+            if (InvokeRequired)
+            {
+                BeginInvoke((Action)(() => SetVimModeEnabled(enabled)));
+                return;
+            }
+
+            if (chkVimMode.Checked != enabled)
+            {
+                chkVimMode.Checked = enabled;
+                return;
+            }
+
+            SaveSettings();
+        }
+
+        public void ToggleVimModeEnabled()
+        {
+            SetVimModeEnabled(!chkVimMode.Checked);
         }
 
         // Method to notify all hooked editors of multi-selection setting changes
@@ -2076,6 +2132,114 @@ namespace AppRefiner
             }
         }
 
+        private ScintillaEditor? FindEditorByHwnd(IntPtr hwnd)
+        {
+            if (hwnd == IntPtr.Zero)
+                return null;
+
+            if (activeEditor != null && activeEditor.hWnd == hwnd)
+                return activeEditor;
+
+            WinApi.GetWindowThreadProcessId(hwnd, out uint pid);
+            if (AppDesignerProcesses.TryGetValue(pid, out var process) &&
+                process.Editors.TryGetValue(hwnd, out var editor))
+            {
+                return editor;
+            }
+
+            return null;
+        }
+
+        private void ShowVimSearchPrompt(ScintillaEditor editor, bool forward, string text)
+        {
+            string prefix = forward ? "/" : "?";
+            int position = ScintillaManager.GetCursorPosition(editor);
+            ScintillaManager.HideCallTip(editor);
+            ScintillaManager.ShowCallTipWithText(editor, position, prefix + text);
+        }
+
+        private void HideVimSearchPrompt(ScintillaEditor editor, IntPtr hwnd)
+        {
+            vimSearchPrompts.Remove(hwnd);
+            ScintillaManager.HideCallTip(editor);
+        }
+
+        private void ShowVimCmdPrompt(ScintillaEditor editor, string text)
+        {
+            int position = ScintillaManager.GetCursorPosition(editor);
+            ScintillaManager.HideCallTip(editor);
+            ScintillaManager.ShowCallTipWithText(editor, position, text);
+        }
+
+        private void HideVimCmdPrompt(ScintillaEditor editor, IntPtr hwnd)
+        {
+            vimCmdPrompts.Remove(hwnd);
+            ScintillaManager.HideCallTip(editor);
+        }
+
+        [System.Runtime.InteropServices.StructLayout(System.Runtime.InteropServices.LayoutKind.Sequential)]
+        private struct COPYDATASTRUCT
+        {
+            public UIntPtr dwData;
+            public uint cbData;
+            public IntPtr lpData;
+        }
+
+        private void FocusEditorSurface(ScintillaEditor editor)
+        {
+            if (editor == null || !editor.IsValid())
+                return;
+
+            var process = editor.AppDesignerProcess;
+            WindowHelper.FocusWindow(process.MainWindowHandle);
+
+            var parentWindow = WindowHelper.GetParentWindow(editor.hWnd);
+            if (parentWindow != IntPtr.Zero)
+            {
+                WindowHelper.BringWindowToTop(parentWindow);
+                WindowHelper.FocusWindow(parentWindow);
+
+                var grandparentWindow = WindowHelper.GetParentWindow(parentWindow);
+                if (grandparentWindow != IntPtr.Zero)
+                {
+                    WindowHelper.BringWindowToTop(grandparentWindow);
+                    WindowHelper.FocusWindow(grandparentWindow);
+                }
+            }
+
+            WindowHelper.BringWindowToTop(editor.hWnd);
+            WindowHelper.FocusWindow(editor.hWnd);
+        }
+
+        private void CycleVimEditor(IntPtr hwnd, int direction)
+        {
+            var currentEditor = FindEditorByHwnd(hwnd);
+            if (currentEditor == null || !currentEditor.IsValid())
+                return;
+
+            var process = currentEditor.AppDesignerProcess;
+            var orderedEditors = process.Editors.Values
+                .Where(editor => editor != null && editor.IsValid())
+                .ToList();
+
+            if (orderedEditors.Count <= 1)
+                return;
+
+            int currentIndex = orderedEditors.FindIndex(editor => editor.hWnd == currentEditor.hWnd);
+            if (currentIndex < 0)
+                return;
+
+            int step = direction >= 0 ? 1 : -1;
+            int targetIndex = (currentIndex + step + orderedEditors.Count) % orderedEditors.Count;
+            var targetEditor = orderedEditors[targetIndex];
+
+            if (targetEditor == null || !targetEditor.IsValid())
+                return;
+
+            SetActiveEditor(targetEditor.hWnd);
+            FocusEditorSurface(targetEditor);
+        }
+
 
 
         // Check if content has changed and process if necessary
@@ -2670,6 +2834,187 @@ namespace AppRefiner
                     /* Execute the ExpandInterpolatedString  refactor */
                 }
 
+            }
+            else if (m.Msg == AR_VIM_SEARCH_BEGIN)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+
+                bool forward = (char)m.LParam.ToInt32() != '?';
+                vimSearchPrompts[hwnd] = (forward, string.Empty);
+                ShowVimSearchPrompt(editor, forward, string.Empty);
+            }
+            else if (m.Msg == AR_VIM_SEARCH_APPEND)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                if (!vimSearchPrompts.TryGetValue(hwnd, out var promptState)) return;
+
+                promptState.Text += (char)m.LParam.ToInt32();
+                vimSearchPrompts[hwnd] = promptState;
+                ShowVimSearchPrompt(editor, promptState.Forward, promptState.Text);
+            }
+            else if (m.Msg == AR_VIM_SEARCH_BACKSPACE)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                if (!vimSearchPrompts.TryGetValue(hwnd, out var promptState)) return;
+
+                if (promptState.Text.Length > 0)
+                {
+                    promptState.Text = promptState.Text[..^1];
+                }
+                vimSearchPrompts[hwnd] = promptState;
+                ShowVimSearchPrompt(editor, promptState.Forward, promptState.Text);
+            }
+            else if (m.Msg == AR_VIM_SEARCH_CANCEL)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+
+                HideVimSearchPrompt(editor, hwnd);
+            }
+            else if (m.Msg == AR_VIM_SEARCH_COMMIT)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                if (!vimSearchPrompts.TryGetValue(hwnd, out var promptState))
+                {
+                    ScintillaManager.HideCallTip(editor);
+                    return;
+                }
+
+                HideVimSearchPrompt(editor, hwnd);
+
+                string term = promptState.Text;
+                if (string.IsNullOrWhiteSpace(term))
+                {
+                    if (editor.SearchState.HasValidSearch)
+                    {
+                        if (promptState.Forward)
+                            ScintillaManager.FindNext(editor);
+                        else
+                            ScintillaManager.FindPrevious(editor);
+                    }
+                    return;
+                }
+
+                ScintillaManager.ExecuteVimSearch(editor, term, promptState.Forward);
+            }
+            else if (m.Msg == AR_VIM_SEARCH_NEXT)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+
+                bool sameDirection = m.LParam.ToInt32() != 0;
+                if (!editor.SearchState.HasValidSearch) return;
+
+                bool forward = sameDirection
+                    ? editor.SearchState.LastSearchForward
+                    : !editor.SearchState.LastSearchForward;
+
+                if (forward)
+                    ScintillaManager.FindNext(editor);
+                else
+                    ScintillaManager.FindPrevious(editor);
+            }
+            else if (m.Msg == AR_VIM_SHOW_TOOLTIP)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+
+                int position = m.LParam.ToInt32();
+                TooltipProviders.TooltipManager.HideTooltip(editor);
+                TooltipProviders.TooltipManager.ShowTooltip(editor, position);
+            }
+            else if (m.Msg == AR_VIM_CYCLE_EDITOR)
+            {
+                CycleVimEditor(m.WParam, m.LParam.ToInt32());
+            }
+            else if (m.Msg == AR_VIM_CMD_BEGIN)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                vimCmdPrompts[hwnd] = ":";
+                ShowVimCmdPrompt(editor, ":");
+            }
+            else if (m.Msg == AR_VIM_CMD_APPEND)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                if (!vimCmdPrompts.TryGetValue(hwnd, out var cmdText)) return;
+                cmdText += (char)m.LParam.ToInt32();
+                vimCmdPrompts[hwnd] = cmdText;
+                ShowVimCmdPrompt(editor, cmdText);
+            }
+            else if (m.Msg == AR_VIM_CMD_BACKSPACE)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                if (!vimCmdPrompts.TryGetValue(hwnd, out var cmdText)) return;
+                if (cmdText.Length > 1)
+                    cmdText = cmdText[..^1];
+                vimCmdPrompts[hwnd] = cmdText;
+                ShowVimCmdPrompt(editor, cmdText);
+            }
+            else if (m.Msg == AR_VIM_CMD_CANCEL)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                HideVimCmdPrompt(editor, hwnd);
+            }
+            else if (m.Msg == AR_VIM_CMD_COMMIT)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                HideVimCmdPrompt(editor, hwnd);
+            }
+            else if (m.Msg == AR_VIM_NOH)
+            {
+                var hwnd = m.WParam;
+                var editor = FindEditorByHwnd(hwnd);
+                if (editor == null || !editor.IsValid()) return;
+                ScintillaManager.ClearSearchIndicators(editor);
+            }
+            else if (m.Msg == WM_COPYDATA)
+            {
+                var cds = (COPYDATASTRUCT)System.Runtime.InteropServices.Marshal.PtrToStructure(
+                    m.LParam, typeof(COPYDATASTRUCT))!;
+                if ((uint)cds.dwData.ToUInt64() == VIM_DIALOG_COPYDATA && cds.cbData > 0)
+                {
+                    var bytes = new byte[cds.cbData];
+                    System.Runtime.InteropServices.Marshal.Copy(cds.lpData, bytes, 0, (int)cds.cbData);
+                    var str = System.Text.Encoding.UTF8.GetString(bytes).TrimEnd('\0');
+                    var sep = str.IndexOf('\0');
+                    var title = sep >= 0 ? str[..sep] : "Vim";
+                    var text  = sep >= 0 ? str[(sep + 1)..] : str;
+
+                    var hwnd = m.WParam;
+                    var editor = FindEditorByHwnd(hwnd);
+                    if (editor != null && editor.IsValid())
+                    {
+                        Task.Delay(100).ContinueWith(_ =>
+                        {
+                            var mainHandle = System.Diagnostics.Process
+                                .GetProcessById((int)editor.AppDesignerProcess.ProcessId).MainWindowHandle;
+                            var wrapper = new WindowWrapper(mainHandle);
+                            new MessageBoxDialog(text, title, MessageBoxButtons.OK, mainHandle)
+                                .ShowDialog(wrapper);
+                        });
+                    }
+                }
             }
             else if (m.Msg == AR_FUNCTION_CALL_TIP)
             {
@@ -3280,23 +3625,12 @@ namespace AppRefiner
 
                 var result = goToVisitor.Result;
 
-                if (result == null)
+                if (result == null || (result.TargetProgram == null && result.SourceSpan == null))
                 {
-                    string errorMsg = "Unable to determine symbol at cursor position";
-                    Debug.Log($"Definition resolution failed");
-
-                    // Show error message
-                    IntPtr mainHandle = activeEditor.AppDesignerProcess.MainWindowHandle;
-                    var handleWrapper = new WindowWrapper(mainHandle);
-                    Task.Delay(100).ContinueWith(_ =>
-                    {
-                        new MessageBoxDialog(
-                            errorMsg,
-                            "Go to Definition",
-                            MessageBoxButtons.OK,
-                            mainHandle
-                        ).ShowDialog(handleWrapper);
-                    });
+                    string errorMsg = string.IsNullOrWhiteSpace(result?.ErrorMessage)
+                        ? "Unable to determine symbol at cursor position"
+                        : result.ErrorMessage;
+                    Debug.Log($"Definition resolution failed: {errorMsg}");
                     return;
                 }
 

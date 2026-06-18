@@ -161,6 +161,7 @@ namespace AppRefiner
             // Always enable Command Palette, use the provided shortcuts
             var shortcuts = EventHookInstaller.EnsureCommandPaletteEnabled(enabledShortcuts);
             EventHookInstaller.SubclassMainWindow(this, CallbackWindow, shortcuts);
+            EventHookInstaller.SetVimMode(MainWindowHandle, Settings.VimModeEnabled);
 
             EventHookInstaller.SubclassResultsList(MainThreadId, ResultsListView, IntPtr.Zero);
         }

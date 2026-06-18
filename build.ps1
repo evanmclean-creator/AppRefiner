@@ -1,7 +1,7 @@
 param(
     [switch]$SelfContained = $false,
     [switch]$Clean = $false,
-    [string]$Version = "",  # Allow manual version override
+    [string]$Version = "1.0.0",  # Allow manual version override
     [string]$SigningKeyPath = "",  # Path to strong name key file (.snk)
     [string]$SignToolPath = "",  # Path to signtool.exe
     [string]$SignDlibPath = "",  # Path to Azure.CodeSigning.Dlib.dll

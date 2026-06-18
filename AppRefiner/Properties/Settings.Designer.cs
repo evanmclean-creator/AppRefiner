@@ -161,6 +161,18 @@ namespace AppRefiner.Properties {
                 this["autoPair"] = value;
             }
         }
+
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool vimModeEnabled {
+            get {
+                return ((bool)(this["vimModeEnabled"]));
+            }
+            set {
+                this["vimModeEnabled"] = value;
+            }
+        }
         
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]

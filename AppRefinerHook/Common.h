@@ -6,6 +6,7 @@
 #endif
 
 #define WIN32_LEAN_AND_MEAN
+#define NOMINMAX
 #include <windows.h>
 #include <string>
 #include <cctype>
@@ -32,6 +33,8 @@
 // wParam = Scintilla editor HWND, lParam = 1 (enable) or 0 (disable)
 #define WM_AR_SET_MINIMAP (WM_USER + 1010)
 #define WM_AR_SET_PARAM_NAMES (WM_USER + 1011)
+// Message to toggle Vim-style modal editing
+#define WM_AR_TOGGLE_VIM (WM_USER + 1012)
 
 /* TODO define messages with a mask to indicate "this is a scintilla event message" */
 #define WM_SCN_EVENT_MASK 0x7000
@@ -63,6 +66,20 @@
 #define WM_AR_SCINTILLA_NOT_FOUND 2518      // Scintilla DLL file not found at specified path (wParam=(major<<16)|minor, lParam=(build<<16)|revision)
 #define WM_AR_COMBO_BUTTON_CLICKED 2519     // ComboBox button clicked notification
 #define WM_AR_CONTEXT_MENU_OPTION 2520      // Context menu option selected (wParam=option ID, lParam=toggle state for checkboxes or 0)
+#define WM_AR_VIM_SEARCH_BEGIN 2521         // Begin a Vim / or ? search (wParam=editor HWND, lParam='/' or '?')
+#define WM_AR_VIM_SEARCH_APPEND 2522        // Append a character to the Vim search prompt (wParam=editor HWND, lParam=char)
+#define WM_AR_VIM_SEARCH_BACKSPACE 2523     // Backspace the Vim search prompt (wParam=editor HWND)
+#define WM_AR_VIM_SEARCH_CANCEL 2524        // Cancel the Vim search prompt (wParam=editor HWND)
+#define WM_AR_VIM_SEARCH_COMMIT 2525        // Commit the Vim search prompt (wParam=editor HWND)
+#define WM_AR_VIM_SEARCH_NEXT 2526          // Repeat search forward/backward (wParam=editor HWND, lParam=1 forward / 0 backward)
+#define WM_AR_VIM_SHOW_TOOLTIP 2527         // Show tooltip at the current caret (wParam=editor HWND, lParam=caret position)
+#define WM_AR_VIM_CYCLE_EDITOR 2528         // Cycle to previous/next editor in the current App Designer instance (wParam=editor HWND, lParam=-1 or 1)
+#define WM_AR_VIM_CMD_BEGIN     2529        // Open ':' command prompt (wParam=editor HWND)
+#define WM_AR_VIM_CMD_APPEND    2530        // Append char to ':' prompt (wParam=editor HWND, lParam=char)
+#define WM_AR_VIM_CMD_BACKSPACE 2531        // Backspace ':' prompt (wParam=editor HWND)
+#define WM_AR_VIM_CMD_CANCEL    2532        // Cancel ':' prompt (wParam=editor HWND)
+#define WM_AR_VIM_CMD_COMMIT    2533        // Commit ':' prompt - C# hides prompt, C++ already executed (wParam=editor HWND)
+#define WM_AR_VIM_NOH           2534        // Clear search highlights (:noh) (wParam=editor HWND)
 #define WM_SCN_USERLIST_SELECTION WM_SCN(SCN_USERLISTSELECTION) // User list selection notification
 
 // Context menu option IDs (for WM_AR_CONTEXT_MENU_OPTION wParam)
@@ -78,6 +95,7 @@ extern HHOOK g_keyboardHook;
 extern HMODULE g_hModule;
 extern HMODULE g_dllSelfReference;
 extern bool g_enableAutoPairing;
+extern bool g_enableVimMode;
 // Bit field for shortcut types
 enum ShortcutType : unsigned int {
     SHORTCUT_NONE = 0,

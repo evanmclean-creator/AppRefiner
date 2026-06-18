@@ -47,6 +47,7 @@ namespace AppRefiner
             grpEditorFeatures = new GroupBox();
             chkMultiSelection = new CheckBox();
             chkAutoPairing = new CheckBox();
+            chkVimMode = new CheckBox();
             chkDocMinimap = new CheckBox();
             chkInlineParameterHints = new CheckBox();
             chkLineSelectionFix = new CheckBox();
@@ -255,12 +256,13 @@ namespace AppRefiner
             // 
             grpEditorFeatures.Controls.Add(chkMultiSelection);
             grpEditorFeatures.Controls.Add(chkAutoPairing);
+            grpEditorFeatures.Controls.Add(chkVimMode);
             grpEditorFeatures.Controls.Add(chkDocMinimap);
             grpEditorFeatures.Controls.Add(chkInlineParameterHints);
             grpEditorFeatures.Controls.Add(chkLineSelectionFix);
             grpEditorFeatures.Location = new Point(8, 107);
             grpEditorFeatures.Name = "grpEditorFeatures";
-            grpEditorFeatures.Size = new Size(270, 145);
+            grpEditorFeatures.Size = new Size(270, 170);
             grpEditorFeatures.TabIndex = 1;
             grpEditorFeatures.TabStop = false;
             grpEditorFeatures.Text = "Editor Features";
@@ -284,7 +286,17 @@ namespace AppRefiner
             chkAutoPairing.TabIndex = 1;
             chkAutoPairing.Text = "Pair Quotes and Parens";
             chkAutoPairing.UseVisualStyleBackColor = true;
-            // 
+            //
+            // chkVimMode
+            //
+            chkVimMode.AutoSize = true;
+            chkVimMode.Location = new Point(10, 147);
+            chkVimMode.Name = "chkVimMode";
+            chkVimMode.Size = new Size(80, 19);
+            chkVimMode.TabIndex = 5;
+            chkVimMode.Text = "Vim Mode";
+            chkVimMode.UseVisualStyleBackColor = true;
+            //
             // chkDocMinimap
             // 
             chkDocMinimap.AutoSize = true;
@@ -324,7 +336,7 @@ namespace AppRefiner
             groupBox3.Controls.Add(label1);
             groupBox3.Controls.Add(cmbTheme);
             groupBox3.Controls.Add(chkFilled);
-            groupBox3.Location = new Point(8, 258);
+            groupBox3.Location = new Point(8, 283);
             groupBox3.Name = "groupBox3";
             groupBox3.Size = new Size(270, 147);
             groupBox3.TabIndex = 2;
@@ -561,7 +573,7 @@ namespace AppRefiner
             grpApplication.Controls.Add(lblTnsAdminDir);
             grpApplication.Controls.Add(txtTnsAdminDir);
             grpApplication.Controls.Add(btnBrowseTnsAdmin);
-            grpApplication.Location = new Point(8, 411);
+            grpApplication.Location = new Point(8, 436);
             grpApplication.Name = "grpApplication";
             grpApplication.Size = new Size(546, 105);
             grpApplication.TabIndex = 6;
@@ -1121,6 +1133,7 @@ namespace AppRefiner
         // Editor Features controls
         private CheckBox chkMultiSelection;
         private CheckBox chkAutoPairing;
+        private CheckBox chkVimMode;
         private CheckBox chkDocMinimap;
         private CheckBox chkInlineParameterHints;
         private CheckBox chkLineSelectionFix;

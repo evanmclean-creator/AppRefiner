@@ -32,6 +32,9 @@
     <Setting Name="autoPair" Type="System.Boolean" Scope="User">
       <Value Profile="(Default)">False</Value>
     </Setting>
+    <Setting Name="vimModeEnabled" Type="System.Boolean" Scope="User">
+      <Value Profile="(Default)">False</Value>
+    </Setting>
     <Setting Name="SnapshotDatabasePath" Type="System.String" Scope="User">
       <Value Profile="(Default)" />
     </Setting>

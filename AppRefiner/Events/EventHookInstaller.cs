@@ -16,6 +16,7 @@ namespace AppRefiner.Events
         private const uint WM_LOAD_SCINTILLA_DLL = WM_USER + 1009;
         private const uint WM_AR_SET_MINIMAP = WM_USER + 1010;
         private const uint WM_AR_SET_PARAM_NAMES = WM_USER + 1011;
+        private const uint WM_AR_TOGGLE_VIM = WM_USER + 1012;
 
         // Bit field for shortcut types
         [Flags]
@@ -224,6 +225,16 @@ namespace AppRefiner.Events
             if (mainWindowHandle != IntPtr.Zero)
             {
                 return WinApi.SendMessage(mainWindowHandle, (int)WM_TOGGLE_AUTO_PAIRING, enabled ? 1 : 0, IntPtr.Zero) != IntPtr.Zero;
+            }
+            return false;
+        }
+
+        // Method to set Vim mode for a specific main window
+        public static bool SetVimMode(IntPtr mainWindowHandle, bool enabled)
+        {
+            if (mainWindowHandle != IntPtr.Zero)
+            {
+                return WinApi.SendMessage(mainWindowHandle, (int)WM_AR_TOGGLE_VIM, enabled ? 1 : 0, IntPtr.Zero) != IntPtr.Zero;
             }
             return false;
         }

@@ -2262,6 +2262,30 @@ namespace AppRefiner
             return PerformSearch(editor, forward: false);
         }
 
+        public static bool ExecuteVimSearch(ScintillaEditor editor, string searchTerm, bool forward)
+        {
+            if (editor == null || string.IsNullOrWhiteSpace(searchTerm))
+                return false;
+
+            var searchState = editor.SearchState;
+            searchState.LastSearchTerm = searchTerm;
+            searchState.MatchCase = false;
+            searchState.WholeWord = false;
+            searchState.WordStart = false;
+            searchState.UseRegex = false;
+            searchState.UsePosixRegex = false;
+            searchState.UseCxx11Regex = false;
+            searchState.SearchInSelection = false;
+            searchState.SearchInMethod = false;
+            searchState.ClearSelectionRange();
+            searchState.LastSearchForward = forward;
+            searchState.UpdateSearchHistory(searchTerm);
+
+            ClearSearchIndicators(editor);
+            MarkAllMatches(editor, searchTerm);
+            return PerformSearch(editor, forward);
+        }
+
         /// <summary>
         /// Gets the start and end range of the current method at the cursor position
         /// Uses ANTLR parsing to identify method boundaries including method headers, function definitions, getters, and setters

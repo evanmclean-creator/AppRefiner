@@ -405,3 +405,6 @@ AppRefiner*.zip
 **/CLAUDE.local.md
 .claude/settings.local.json
 /.idea/.idea.App Refiner/.idea
+
+# NppVim upstream source — porting reference only, not part of AppRefiner
+NppVim-1.14.0.0/

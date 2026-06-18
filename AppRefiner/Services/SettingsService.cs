@@ -14,6 +14,7 @@ namespace AppRefiner
         public bool BetterSQL { get; set; }
         public bool AutoDark { get; set; }
         public bool AutoPair { get; set; }
+        public bool VimModeEnabled { get; set; }
         public bool PromptForDB { get; set; }
         public string? LintReportPath { get; set; }
         public string? TNS_ADMIN { get; set; }
@@ -57,6 +58,7 @@ namespace AppRefiner
                 settings.BetterSQL = Properties.Settings.Default.betterSQL;
                 settings.AutoDark = Properties.Settings.Default.autoDark;
                 settings.AutoPair = Properties.Settings.Default.autoPair;
+                settings.VimModeEnabled = Properties.Settings.Default.vimModeEnabled;
                 settings.PromptForDB = Properties.Settings.Default.promptForDB;
                 settings.LintReportPath = Properties.Settings.Default.LintReportPath;
                 settings.CheckEventMapping = Properties.Settings.Default.checkEventMapping;
@@ -94,6 +96,7 @@ namespace AppRefiner
             Properties.Settings.Default.betterSQL = settings.BetterSQL;
             Properties.Settings.Default.autoDark = settings.AutoDark;
             Properties.Settings.Default.autoPair = settings.AutoPair;
+            Properties.Settings.Default.vimModeEnabled = settings.VimModeEnabled;
             Properties.Settings.Default.promptForDB = settings.PromptForDB;
             Properties.Settings.Default.LintReportPath = settings.LintReportPath;
             Properties.Settings.Default.TNS_ADMIN = settings.TNS_ADMIN;
