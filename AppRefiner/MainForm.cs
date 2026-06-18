@@ -381,10 +381,9 @@ namespace AppRefiner
                 //AppDesignerProcesses.Add((uint)proc.Id, adp);
             }
 
-            /* Check for new version */
-            bool newVersionAvailable = IsNewVersionAvailable();
+            /* Update-available banner disabled to prevent accidental clicks. */
             this.Height -= splitContainer1.Panel2.Height;
-            splitContainer1.Panel2Collapsed = !newVersionAvailable;
+            splitContainer1.Panel2Collapsed = true;
 
         }
 

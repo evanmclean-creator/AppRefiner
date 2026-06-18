@@ -262,7 +262,7 @@ namespace AppRefiner
             grpEditorFeatures.Controls.Add(chkLineSelectionFix);
             grpEditorFeatures.Location = new Point(8, 107);
             grpEditorFeatures.Name = "grpEditorFeatures";
-            grpEditorFeatures.Size = new Size(270, 170);
+            grpEditorFeatures.Size = new Size(270, 145);
             grpEditorFeatures.TabIndex = 1;
             grpEditorFeatures.TabStop = false;
             grpEditorFeatures.Text = "Editor Features";
@@ -290,7 +290,7 @@ namespace AppRefiner
             // chkVimMode
             //
             chkVimMode.AutoSize = true;
-            chkVimMode.Location = new Point(10, 147);
+            chkVimMode.Location = new Point(165, 22);
             chkVimMode.Name = "chkVimMode";
             chkVimMode.Size = new Size(80, 19);
             chkVimMode.TabIndex = 5;
@@ -336,7 +336,7 @@ namespace AppRefiner
             groupBox3.Controls.Add(label1);
             groupBox3.Controls.Add(cmbTheme);
             groupBox3.Controls.Add(chkFilled);
-            groupBox3.Location = new Point(8, 283);
+            groupBox3.Location = new Point(8, 258);
             groupBox3.Name = "groupBox3";
             groupBox3.Size = new Size(270, 147);
             groupBox3.TabIndex = 2;
@@ -573,7 +573,7 @@ namespace AppRefiner
             grpApplication.Controls.Add(lblTnsAdminDir);
             grpApplication.Controls.Add(txtTnsAdminDir);
             grpApplication.Controls.Add(btnBrowseTnsAdmin);
-            grpApplication.Location = new Point(8, 436);
+            grpApplication.Location = new Point(8, 411);
             grpApplication.Name = "grpApplication";
             grpApplication.Size = new Size(546, 105);
             grpApplication.TabIndex = 6;
