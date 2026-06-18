@@ -321,10 +321,14 @@ Tell the agent these decisions explicitly — don't let it improvise them:
     `MessageBoxDialog`. **Depends on Item 7 (marks/registers) being complete.**
   - `:marks` — read-only list of set marks. **Depends on Item 7.**
   - `:delm a` / `:delm a-z` — delete one or a range of marks. **Depends on Item 7.**
+  - `:q` — close the active PeopleCode editor by delegating to Application
+    Designer's own close-current-document accelerator (`Ctrl+F4`), so normal
+    save/discard prompts still come from the host app.
 
   **Out of scope:**
-  - `:w`, `:q`, `:wq`, `:x`, `:wqa`, `:qa` — Application Designer owns save/close;
-    not safely triggerable from an injected hook.
+  - `:w`, `:wq`, `:x`, `:wqa`, `:qa` — Application Designer owns save/close;
+    only plain `:q` is routed through the host accelerator. The rest would
+    require host behaviors we do not have a definitive way to drive safely.
   - `:e`, `:r filename`, `:sp`, `:vs`, `:split`, `:vsplit`, `:bn`, `:bp`, `:bd` —
     Notepad++ file/buffer/split model; no equivalent in Application Designer.
   - `:sort` / `:sort!` — routes through `nppData`/`IDM_EDIT_SORTLINES_*` (Notepad++
@@ -609,8 +613,10 @@ not just by the agent reading its own code.
       - `:set ignorecase` / `:set noignorecase`
       - `:reg` / `:registers` (requires Item 7 complete)
       - `:marks`, `:delm <letter>`, `:delm <a-z>` (requires Item 7 complete)
+      - `:q` — close the active editor via Application Designer's own
+        `Ctrl+F4` behavior, including any host save/discard prompts
 
-      **Explicitly out of scope:** `:w`, `:q`, `:wq`, `:x`, `:wqa`, `:qa`,
+      **Explicitly out of scope:** `:w`, `:wq`, `:x`, `:wqa`, `:qa`,
       `:e`, `:r filename`, `:sp`/`:vs`, `:bn`/`:bp`/`:bd`, `:sort`, `:map`
       family, `:source`, config-file commands, `:help`, `:!`, `:wrap`.
 

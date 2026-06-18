@@ -56,6 +56,7 @@ namespace AppRefiner
         private const int WM_KEYUP = 0x0101;
         private const int VK_CONTROL = 0x11;
         private const int VK_O = 0x4F;
+        private const int VK_F4 = 0x73;
 
         // Services for handling OS-level interactions
         private WinEventService? winEventService;
@@ -142,6 +143,7 @@ namespace AppRefiner
         private const int AR_VIM_GOTO_DEFINITION = 2535;
         private const int AR_VIM_NAV_BACK      = 2536;
         private const int AR_VIM_NAV_FORWARD   = 2537;
+        private const int AR_VIM_CLOSE_EDITOR  = 2538;
         private const int WM_COPYDATA          = 0x004A;
         private const uint VIM_DIALOG_COPYDATA = 0x56494D44u; // 'VIMD'
         private const int AR_SCINTILLA_ALREADY_LOADED = 2514; // Scintilla DLL is already loaded
@@ -1829,6 +1831,38 @@ namespace AppRefiner
             }
         }
 
+        private void CloseActiveEditorViaHost()
+        {
+            if (activeAppDesigner == null)
+            {
+                Debug.Log("CloseActiveEditorViaHost: No active AppDesigner process");
+                return;
+            }
+
+            try
+            {
+                var mainWindowHandle = activeAppDesigner.MainWindowHandle;
+                Thread.Sleep(100);
+                WinApi.SetForegroundWindow(mainWindowHandle);
+                if (mainWindowHandle != IntPtr.Zero)
+                {
+                    Debug.Log($"CloseActiveEditorViaHost: Sending Ctrl+F4 to App Designer window {mainWindowHandle:X}");
+                    keybd_event(VK_CONTROL, 0, 0, 0);
+                    keybd_event(VK_F4, 0, 0, 0);
+                    keybd_event(VK_F4, 0, 2, 0);
+                    keybd_event(VK_CONTROL, 0, 2, 0);
+                }
+                else
+                {
+                    Debug.Log("CloseActiveEditorViaHost: Main window handle is null");
+                }
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"CloseActiveEditorViaHost: Error during close: {ex.Message}");
+            }
+        }
+
 
         private string BuildOpenTargetString(OpenTarget target, SourceSpan? span = null)
         {
@@ -3004,6 +3038,12 @@ namespace AppRefiner
             {
                 // Ctrl+I in Vim Normal mode — jumplist forward (same as Alt+Right).
                 NavigateForwardCommand();
+            }
+            else if (m.Msg == AR_VIM_CLOSE_EDITOR)
+            {
+                // :q in Vim command mode — delegate to Application Designer's
+                // normal close-current-document accelerator so host prompts still apply.
+                CloseActiveEditorViaHost();
             }
             else if (m.Msg == WM_COPYDATA)
             {

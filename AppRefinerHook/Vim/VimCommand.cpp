@@ -282,6 +282,14 @@ void ExecuteColonCommand(HWND hwnd, VimEditorState& state, VimSessionState& sess
         return;
     }
 
+    // ── :q ───────────────────────────────────────────────────────────────
+    if (cmd == "q") {
+        if (g_callbackWindow && IsWindow(g_callbackWindow))
+            ::SendMessage(g_callbackWindow, WM_AR_VIM_CLOSE_EDITOR,
+                          reinterpret_cast<WPARAM>(hwnd), 0);
+        return;
+    }
+
     // ── bare line number ─────────────────────────────────────────────────
     {
         bool isNum = !cmd.empty();
