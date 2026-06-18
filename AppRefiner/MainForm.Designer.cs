@@ -48,6 +48,7 @@ namespace AppRefiner
             chkMultiSelection = new CheckBox();
             chkAutoPairing = new CheckBox();
             chkVimMode = new CheckBox();
+            chkAutoMaximizeEditor = new CheckBox();
             chkDocMinimap = new CheckBox();
             chkInlineParameterHints = new CheckBox();
             chkLineSelectionFix = new CheckBox();
@@ -257,6 +258,7 @@ namespace AppRefiner
             grpEditorFeatures.Controls.Add(chkMultiSelection);
             grpEditorFeatures.Controls.Add(chkAutoPairing);
             grpEditorFeatures.Controls.Add(chkVimMode);
+            grpEditorFeatures.Controls.Add(chkAutoMaximizeEditor);
             grpEditorFeatures.Controls.Add(chkDocMinimap);
             grpEditorFeatures.Controls.Add(chkInlineParameterHints);
             grpEditorFeatures.Controls.Add(chkLineSelectionFix);
@@ -296,6 +298,16 @@ namespace AppRefiner
             chkVimMode.TabIndex = 5;
             chkVimMode.Text = "Vim Mode";
             chkVimMode.UseVisualStyleBackColor = true;
+            //
+            // chkAutoMaximizeEditor
+            //
+            chkAutoMaximizeEditor.AutoSize = true;
+            chkAutoMaximizeEditor.Location = new Point(165, 47);
+            chkAutoMaximizeEditor.Name = "chkAutoMaximizeEditor";
+            chkAutoMaximizeEditor.Size = new Size(97, 34);
+            chkAutoMaximizeEditor.TabIndex = 6;
+            chkAutoMaximizeEditor.Text = "Maximize\r\nEditor";
+            chkAutoMaximizeEditor.UseVisualStyleBackColor = true;
             //
             // chkDocMinimap
             // 
@@ -1134,6 +1146,7 @@ namespace AppRefiner
         private CheckBox chkMultiSelection;
         private CheckBox chkAutoPairing;
         private CheckBox chkVimMode;
+        private CheckBox chkAutoMaximizeEditor;
         private CheckBox chkDocMinimap;
         private CheckBox chkInlineParameterHints;
         private CheckBox chkLineSelectionFix;

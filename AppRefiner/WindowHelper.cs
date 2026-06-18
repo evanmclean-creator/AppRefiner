@@ -45,6 +45,9 @@ namespace AppRefiner
         private static extern bool IsIconic(IntPtr hWnd);
 
         [DllImport("user32.dll")]
+        private static extern bool IsZoomed(IntPtr hWnd);
+
+        [DllImport("user32.dll")]
         private static extern bool ClientToScreen(IntPtr hWnd, ref POINT lpPoint);
 
         [DllImport("user32.dll")]
@@ -61,6 +64,7 @@ namespace AppRefiner
         public const uint SWP_NOMOVE = 0x0002;
         public const uint SWP_NOSIZE = 0x0001;
         public const uint SWP_SHOWWINDOW = 0x0040;
+        public const int SW_MAXIMIZE = 3;
 
         [StructLayout(LayoutKind.Sequential)]
         public struct RECT
@@ -196,6 +200,37 @@ namespace AppRefiner
         internal static nint GetParentWindow(nint hWnd)
         {
             return GetParent(hWnd);
+        }
+
+        public static IntPtr GetGrandparentWindow(IntPtr hWnd)
+        {
+            IntPtr parent = GetParent(hWnd);
+            if (parent == IntPtr.Zero)
+            {
+                return IntPtr.Zero;
+            }
+
+            return GetParent(parent);
+        }
+
+        public static bool MaximizeWindow(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            return ShowWindow(hWnd, SW_MAXIMIZE);
+        }
+
+        public static bool IsWindowMaximized(IntPtr hWnd)
+        {
+            if (hWnd == IntPtr.Zero)
+            {
+                return false;
+            }
+
+            return IsZoomed(hWnd);
         }
 
         /// <summary>

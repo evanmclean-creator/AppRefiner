@@ -174,6 +174,7 @@ namespace AppRefiner
         private Dictionary<ScintillaEditor, DateTime> lastStylerProcessingTime = new();
         private readonly Dictionary<IntPtr, (bool Forward, string Text)> vimSearchPrompts = new();
         private readonly Dictionary<IntPtr, string> vimCmdPrompts = new();
+        private readonly HashSet<IntPtr> autoMaximizedEditorWindows = new();
         private const int STYLER_PROCESSING_DEBOUNCE_MS = 1000; // Prevent duplicate processing within 100ms
 
         // Throttling for duplicate shortcut prevention
@@ -256,6 +257,7 @@ namespace AppRefiner
             chkRememberFolds.Checked = generalSettings.RememberFolds;
             chkOverrideFindReplace.Checked = generalSettings.OverrideFindReplace;
             chkAutoCenterDialogs.Checked = generalSettings.AutoCenterDialogs;
+            chkAutoMaximizeEditor.Checked = generalSettings.AutoMaximizeEditorWindows;
             chkMultiSelection.Checked = generalSettings.MultiSelection;
             chkOverrideOpen.Checked = generalSettings.OverrideOpen;
             chkLineSelectionFix.Checked = generalSettings.LineSelectionFix;
@@ -577,6 +579,7 @@ namespace AppRefiner
             chkOverrideFindReplace.CheckedChanged += GeneralSetting_Changed;
             chkOverrideOpen.CheckedChanged += GeneralSetting_Changed;
             chkAutoCenterDialogs.CheckedChanged += GeneralSetting_Changed;
+            chkAutoMaximizeEditor.CheckedChanged += GeneralSetting_Changed;
             chkMultiSelection.CheckedChanged += GeneralSetting_Changed;
             chkLineSelectionFix.CheckedChanged += GeneralSetting_Changed;
             chkInlineParameterHints.CheckedChanged += GeneralSetting_Changed;
@@ -642,6 +645,10 @@ namespace AppRefiner
             if (sender == chkOverrideOpen)
             {
                 btnConfigSmartOpen.Enabled = chkOverrideOpen.Checked;
+            }
+            if (sender == chkAutoMaximizeEditor && chkAutoMaximizeEditor.Checked)
+            {
+                TryAutoMaximizeEditorWindow(activeEditor);
             }
 
             SaveSettings(); // Call the consolidated SaveSettings method
@@ -932,6 +939,7 @@ namespace AppRefiner
                 OverrideFindReplace = chkOverrideFindReplace.Checked,
                 OverrideOpen = chkOverrideOpen.Checked,
                 AutoCenterDialogs = chkAutoCenterDialogs.Checked,
+                AutoMaximizeEditorWindows = chkAutoMaximizeEditor.Checked,
                 MultiSelection = chkMultiSelection.Checked,
                 LineSelectionFix = chkLineSelectionFix.Checked,
                 Theme = cmbTheme.SelectedItem?.ToString() ?? Theme.Default.ToString(),
@@ -2127,6 +2135,7 @@ namespace AppRefiner
 
                         activeAppDesigner = activeEditor.AppDesignerProcess;
                         stylerManager.StylerRules.Where(s => s is FunctionParameterNames).First().Active = activeEditor.ParameterNamesEnabled;
+                        TryAutoMaximizeEditorWindow(activeEditor);
                         return;
                     }
                     else
@@ -2152,6 +2161,7 @@ namespace AppRefiner
 
                         activeAppDesigner = activeEditor.AppDesignerProcess;
                         stylerManager.StylerRules.Where(s => s is FunctionParameterNames).First().Active = activeEditor.ParameterNamesEnabled;
+                        TryAutoMaximizeEditorWindow(activeEditor);
                         return;
                     }
                 }
@@ -2184,6 +2194,37 @@ namespace AppRefiner
             }
 
             return null;
+        }
+
+        private void TryAutoMaximizeEditorWindow(ScintillaEditor? editor)
+        {
+            if (editor == null || !editor.IsValid() || !chkAutoMaximizeEditor.Checked)
+            {
+                return;
+            }
+
+            IntPtr editorWindow = WindowHelper.GetGrandparentWindow(editor.hWnd);
+            if (editorWindow == IntPtr.Zero)
+            {
+                return;
+            }
+
+            if (autoMaximizedEditorWindows.Contains(editorWindow))
+            {
+                return;
+            }
+
+            if (WindowHelper.IsWindowMaximized(editorWindow))
+            {
+                autoMaximizedEditorWindows.Add(editorWindow);
+                return;
+            }
+
+            if (WindowHelper.MaximizeWindow(editorWindow))
+            {
+                autoMaximizedEditorWindows.Add(editorWindow);
+                Debug.Log($"Auto-maximized editor window 0x{editorWindow.ToInt64():X} for {editor.Caption ?? "unknown editor"}");
+            }
         }
 
         private void ShowVimSearchPrompt(ScintillaEditor editor, bool forward, string text)

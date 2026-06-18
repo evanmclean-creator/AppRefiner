@@ -407,6 +407,18 @@ namespace AppRefiner.Properties {
         [global::System.Configuration.UserScopedSettingAttribute()]
         [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
         [global::System.Configuration.DefaultSettingValueAttribute("False")]
+        public bool AutoMaximizeEditorWindows {
+            get {
+                return ((bool)(this["AutoMaximizeEditorWindows"]));
+            }
+            set {
+                this["AutoMaximizeEditorWindows"] = value;
+            }
+        }
+        
+        [global::System.Configuration.UserScopedSettingAttribute()]
+        [global::System.Diagnostics.DebuggerNonUserCodeAttribute()]
+        [global::System.Configuration.DefaultSettingValueAttribute("False")]
         public bool multiSelection {
             get {
                 return ((bool)(this["multiSelection"]));
