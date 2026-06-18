@@ -110,6 +110,13 @@ void InitializeNormalModeKeymap() {
         GotoLine(h, 1);
     });
 
+    // gd — go to definition at the caret (delegates to AppRefiner's F12 logic).
+    k.set("gd", [](HWND h, int) {
+        if (g_callbackWindow && IsWindow(g_callbackWindow))
+            ::SendMessage(g_callbackWindow, WM_AR_VIM_GOTO_DEFINITION,
+                          reinterpret_cast<WPARAM>(h), 0);
+    });
+
     // G — go to the last line (no count) or to line N (count prefix N).
     // NppVim convention: count == 0 or count == 1 means "no explicit count" → last line.
     // This means 1G behaves like G (goes to end); use gg to reach line 1.

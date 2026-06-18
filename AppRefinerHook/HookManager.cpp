@@ -1076,8 +1076,9 @@ LRESULT CALLBACK KeyboardHook(int nCode, WPARAM wParam, LPARAM lParam) {
     }
     
     try {
-        // Only process if any shortcuts are enabled and we have a callback window
-        if (g_enabledShortcuts == SHORTCUT_NONE || !g_callbackWindow || !IsWindow(g_callbackWindow)) {
+        // Only process if any shortcuts are enabled (or Vim mode is on, which has its
+        // own Ctrl+O/Ctrl+I bindings below) and we have a callback window
+        if ((g_enabledShortcuts == SHORTCUT_NONE && !g_enableVimMode) || !g_callbackWindow || !IsWindow(g_callbackWindow)) {
             return CallNextHookEx(g_keyboardHook, nCode, wParam, lParam);
         }
 
@@ -1094,9 +1095,24 @@ LRESULT CALLBACK KeyboardHook(int nCode, WPARAM wParam, LPARAM lParam) {
                 bool hasShift = (GetKeyState(VK_SHIFT) & 0x8000) != 0;
                 bool hasAlt = (GetKeyState(VK_MENU) & 0x8000) != 0;
                 
+                // Vim Normal mode: Ctrl+O / Ctrl+I act as jumplist back/forward
+                // (mirrors Alt+Left / Alt+Right). Checked before the normal shortcut
+                // interception so Ctrl+O navigates instead of opening Smart Open. Only
+                // applies when the focused editor is actually in Vim Normal mode, so
+                // Insert mode and non-Vim editors keep their existing behavior.
+                if (g_enableVimMode && hasCtrl && !hasShift && !hasAlt &&
+                    (wParam == 'O' || wParam == 'I' || wParam == VK_TAB)) {
+                    HWND focused = GetFocus();
+                    if (focused && IsVimNormalModeEditor(focused)) {
+                        UINT navMsg = (wParam == 'O') ? WM_AR_VIM_NAV_BACK : WM_AR_VIM_NAV_FORWARD;
+                        SendMessage(g_callbackWindow, navMsg, reinterpret_cast<WPARAM>(focused), 0);
+                        return 1; // suppress the keystroke
+                    }
+                }
+
                 // Check for specific shortcuts we want to intercept
                 bool shouldIntercept = false;
-                
+
                 if ((g_enabledShortcuts & SHORTCUT_SEARCH) && hasCtrl && !hasAlt && wParam == 'F') {
                     // Ctrl+F
                     shouldIntercept = true;

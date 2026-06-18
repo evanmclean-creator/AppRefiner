@@ -436,6 +436,10 @@ namespace AppRefiner.Database
                     break;
                 case OpenTargetType.SQL:
                     pairs.Add((PSCLASSID.SQL, id));
+                    // PSSQLDEFN is keyed by SQLID + SQLTYPE; App Designer needs both to
+                    // resolve the object. Standalone SQL objects (the kind referenced via
+                    // SQL.NAME / GetSQL / SQLExec) are SQLTYPE 0.
+                    pairs.Add((PSCLASSID.SQLTYPE, "0"));
                     break;
                 case OpenTargetType.StyleSheet:
                     pairs.Add((PSCLASSID.STYLESHEET, id));

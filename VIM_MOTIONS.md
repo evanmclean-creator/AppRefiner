@@ -641,3 +641,34 @@ port calls `CenterCaret()` after the scroll (same behavior as `zz` — sets firs
 visible line to `currentLine - visibleLines / 2`). This makes repeated `Ctrl+D` /
 `Ctrl+U` feel more stable since the cursor stays near the middle of the screen
 rather than drifting to the edge. Both Normal and Visual mode variants center.
+
+### AppRefiner-backed `gd` / `Ctrl+O` / `Ctrl+I` navigation
+Normal mode adds a small AppRefiner-specific navigation layer that does not come
+from NppVim directly:
+
+- `gd` delegates to AppRefiner's existing `Go To Definition` implementation
+- `Ctrl+O` delegates to AppRefiner's navigation-history "back" command
+- `Ctrl+I` delegates to AppRefiner's navigation-history "forward" command
+
+These are routed from the native Vim layer back into C# via custom window
+messages (`WM_AR_VIM_GOTO_DEFINITION`, `WM_AR_VIM_NAV_BACK`,
+`WM_AR_VIM_NAV_FORWARD`) and intentionally reuse AppRefiner's existing
+navigation history rather than building a separate Vim-only jumplist.
+
+One Windows/App Designer quirk is worth documenting: `Ctrl+I` may arrive as
+`VK_TAB` rather than `'I'`, so the native hook treats both forms as the same
+forward-navigation command while Vim mode is active.
+
+### Expanded database-backed `Go To Definition`
+During the Vim work, AppRefiner's existing `Go To Definition` pipeline was
+extended so it can resolve more cross-file PeopleCode symbols when a database
+connection is active. The important practical result is that Vim's `gd` and the
+existing `F12` command now share the same broader navigation surface:
+
+- cross-file Application Class definitions
+- cross-file Application Class methods/properties
+- Record definitions
+- SQL definitions
+
+Unresolved symbols intentionally fail silently so repeated navigation attempts
+do not interrupt editing flow with modal dialogs.

@@ -23,6 +23,29 @@ namespace AppRefiner
 
     public class GoToDefinitionVisitor : ScopedAstVisitor<object>
     {
+        /// <summary>
+        /// PeopleCode metadata reference prefixes (e.g. "Record" in Record.PERSONAL_DATA)
+        /// mapped to the OpenTargetType that F12 should open. Only prefixes that resolve
+        /// to a concrete PSCLASSID are listed; case-insensitive to match PeopleCode.
+        /// </summary>
+        private static readonly Dictionary<string, OpenTargetType> MetadataPrefixes = new(StringComparer.OrdinalIgnoreCase)
+        {
+            ["Record"] = OpenTargetType.Record,
+            ["Field"] = OpenTargetType.Field,
+            ["Page"] = OpenTargetType.Page,
+            ["Panel"] = OpenTargetType.Page,            // legacy alias for Page
+            ["Component"] = OpenTargetType.Component,
+            ["PanelGroup"] = OpenTargetType.Component,  // legacy alias for Component
+            ["Menu"] = OpenTargetType.Menu,
+            ["SQL"] = OpenTargetType.SQL,
+            ["Image"] = OpenTargetType.Image,
+            ["StyleSheet"] = OpenTargetType.StyleSheet,
+            ["HTML"] = OpenTargetType.HTML,
+            ["FileLayout"] = OpenTargetType.FileLayout,
+            ["Message"] = OpenTargetType.Message,
+            ["BusProcess"] = OpenTargetType.BusinessProcess,
+        };
+
         private int _position;
         private IDataManager? _dataManager;
         private ProgramNode _program;
@@ -177,6 +200,27 @@ namespace AppRefiner
         public override void VisitMemberAccess(MemberAccessNode node)
         {
             base.VisitMemberAccess(node);
+
+            /* Metadata definition references: Record.X, SQL.X, Page.X, Field.X, etc.
+               The target is a bare identifier whose name is a metadata keyword (no
+               '&'/'%' prefix), so F12 anywhere on the reference opens that object's
+               definition. These have no in-file source span — we set TargetProgram
+               only and leave SourceSpan null so the open path just opens the object. */
+            if (!node.IsDynamic
+                && node.Target is IdentifierNode metaPrefix
+                && node.SourceSpan.ContainsPosition(_position)
+                && MetadataPrefixes.TryGetValue(metaPrefix.Name, out var metaType)
+                && !string.IsNullOrEmpty(node.MemberName))
+            {
+                var objectName = node.MemberName;
+                Result.TargetProgram = new OpenTarget(
+                    metaType,
+                    objectName,
+                    $"{metaPrefix.Name}.{objectName}",
+                    IDataManager.CreateObjectPairs(metaType, objectName, string.Empty));
+                Result.SourceSpan = null;
+                return;
+            }
 
             if (node.MemberNameSpan.ContainsPosition(_position))
             {

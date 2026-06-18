@@ -139,6 +139,9 @@ namespace AppRefiner
         private const int AR_VIM_CMD_CANCEL    = 2532;
         private const int AR_VIM_CMD_COMMIT    = 2533;
         private const int AR_VIM_NOH           = 2534;
+        private const int AR_VIM_GOTO_DEFINITION = 2535;
+        private const int AR_VIM_NAV_BACK      = 2536;
+        private const int AR_VIM_NAV_FORWARD   = 2537;
         private const int WM_COPYDATA          = 0x004A;
         private const uint VIM_DIALOG_COPYDATA = 0x56494D44u; // 'VIMD'
         private const int AR_SCINTILLA_ALREADY_LOADED = 2514; // Scintilla DLL is already loaded
@@ -2987,6 +2990,21 @@ namespace AppRefiner
                 if (editor == null || !editor.IsValid()) return;
                 ScintillaManager.ClearSearchIndicators(editor);
             }
+            else if (m.Msg == AR_VIM_GOTO_DEFINITION)
+            {
+                // gd in Vim Normal mode — same as F12. Uses activeEditor like F12 does.
+                GoToDefinitionCommand();
+            }
+            else if (m.Msg == AR_VIM_NAV_BACK)
+            {
+                // Ctrl+O in Vim Normal mode — jumplist back (same as Alt+Left).
+                NavigateBackwardCommand();
+            }
+            else if (m.Msg == AR_VIM_NAV_FORWARD)
+            {
+                // Ctrl+I in Vim Normal mode — jumplist forward (same as Alt+Right).
+                NavigateForwardCommand();
+            }
             else if (m.Msg == WM_COPYDATA)
             {
                 var cds = (COPYDATASTRUCT)System.Runtime.InteropServices.Marshal.PtrToStructure(
@@ -3679,14 +3697,13 @@ namespace AppRefiner
 
                 IntPtr mainWindowHandle = activeEditor.AppDesignerProcess.MainWindowHandle;
 
-                // Handle cross-program navigation (base class)
+                // Handle cross-program navigation (base class) and metadata definition
+                // objects (Record/SQL/Page/etc.). The latter have no source span, so
+                // BuildOpenTargetString just opens the object without positioning to a token.
                 if (result.TargetProgram != null)
                 {
                     activeEditor.AppDesignerProcess.PendingSelection = result.SourceSpan;
-                    if (result.SourceSpan != null)
-                    {
-                        activeEditor.AppDesignerProcess.SetOpenTarget(BuildOpenTargetString(result.TargetProgram, result.SourceSpan));
-                    }
+                    activeEditor.AppDesignerProcess.SetOpenTarget(BuildOpenTargetString(result.TargetProgram, result.SourceSpan));
                     return;
                 }
 

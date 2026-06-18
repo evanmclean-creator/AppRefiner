@@ -80,6 +80,9 @@
 #define WM_AR_VIM_CMD_CANCEL    2532        // Cancel ':' prompt (wParam=editor HWND)
 #define WM_AR_VIM_CMD_COMMIT    2533        // Commit ':' prompt - C# hides prompt, C++ already executed (wParam=editor HWND)
 #define WM_AR_VIM_NOH           2534        // Clear search highlights (:noh) (wParam=editor HWND)
+#define WM_AR_VIM_GOTO_DEFINITION 2535      // gd - go to definition at caret (wParam=editor HWND)
+#define WM_AR_VIM_NAV_BACK      2536        // Ctrl+O - navigate backward in jump history (wParam=editor HWND)
+#define WM_AR_VIM_NAV_FORWARD   2537        // Ctrl+I - navigate forward in jump history (wParam=editor HWND)
 #define WM_SCN_USERLIST_SELECTION WM_SCN(SCN_USERLISTSELECTION) // User list selection notification
 
 // Context menu option IDs (for WM_AR_CONTEXT_MENU_OPTION wParam)
