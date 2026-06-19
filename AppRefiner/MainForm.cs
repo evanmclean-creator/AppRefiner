@@ -144,6 +144,7 @@ namespace AppRefiner
         private const int AR_VIM_NAV_BACK      = 2536;
         private const int AR_VIM_NAV_FORWARD   = 2537;
         private const int AR_VIM_CLOSE_EDITOR  = 2538;
+        private const int AR_VIM_SHOW_CHEATSHEET = 2539;
         private const int WM_COPYDATA          = 0x004A;
         private const uint VIM_DIALOG_COPYDATA = 0x56494D44u; // 'VIMD'
         private const int AR_SCINTILLA_ALREADY_LOADED = 2514; // Scintilla DLL is already loaded
@@ -1214,6 +1215,13 @@ namespace AppRefiner
                     }
                 }
             }
+        }
+
+        public void ShowCheatsheetDialog()
+        {
+            IntPtr ownerHandle = activeAppDesigner?.MainWindowHandle ?? this.Handle;
+            using var dialog = new CheatsheetDialog(AvailableCommands, ownerHandle);
+            dialog.ShowDialog(new WindowWrapper(ownerHandle));
         }
 
         private void HandleParamNamesToggle(bool enabled)
@@ -3085,6 +3093,14 @@ namespace AppRefiner
                 // :q in Vim command mode — delegate to Application Designer's
                 // normal close-current-document accelerator so host prompts still apply.
                 CloseActiveEditorViaHost();
+            }
+            else if (m.Msg == AR_VIM_SHOW_CHEATSHEET)
+            {
+                // Defer so this WndProc returns immediately. :help arrives as a
+                // synchronous cross-process SendMessage from App Designer's thread;
+                // showing the modal dialog inline would block that thread for the
+                // dialog's whole lifetime and freeze App Designer (the dialog's owner).
+                BeginInvoke((Action)ShowCheatsheetDialog);
             }
             else if (m.Msg == WM_COPYDATA)
             {

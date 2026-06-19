@@ -290,6 +290,14 @@ void ExecuteColonCommand(HWND hwnd, VimEditorState& state, VimSessionState& sess
         return;
     }
 
+    // ── :help / :h ───────────────────────────────────────────────────────
+    if (cmd == "help" || cmd == "h") {
+        if (g_callbackWindow && IsWindow(g_callbackWindow))
+            ::SendMessage(g_callbackWindow, WM_AR_VIM_SHOW_CHEATSHEET,
+                          reinterpret_cast<WPARAM>(hwnd), 0);
+        return;
+    }
+
     // ── bare line number ─────────────────────────────────────────────────
     {
         bool isNum = !cmd.empty();
