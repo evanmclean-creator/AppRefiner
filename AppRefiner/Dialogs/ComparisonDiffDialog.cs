@@ -1,57 +1,58 @@
 using AppRefiner.Services;
 using DiffPlex.DiffBuilder.Model;
-using System.Runtime.InteropServices;
+using System.Text;
 
 namespace AppRefiner.Dialogs
 {
     /// <summary>
-    /// Side-by-side comparison dialog with synchronized panes and per-hunk apply actions.
+    /// Side-by-side comparison dialog backed by two hosted Scintilla panes. Alignment is done with
+    /// blank line annotations (not by mutating document text), line changes with background markers,
+    /// and intra-line changes with an indicator — the clean-room rendering vocabulary distilled from
+    /// ComparePlus and VS Code (see DIFF_TOOL.md §8). Per-hunk gutter arrows pull a hunk's
+    /// comparison-side text into the local editor.
+    ///
+    /// Pass 1 (step-4 spike): both panes are read-only; the goal is to confirm Scintilla hosts in our
+    /// dialog and that annotations/markers/indicators render. Live in-dialog local editing
+    /// (updateLocalText) is deferred to the next increment once hosting is confirmed.
     /// </summary>
     public sealed class ComparisonDiffDialog : Form
     {
-        private const int EM_GETFIRSTVISIBLELINE = 0x00CE;
-        private const int EM_LINESCROLL = 0x00B6;
-
-        [DllImport("user32.dll", CharSet = CharSet.Auto)]
-        private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
+        private const int MARKER_ADDED = 20;
+        private const int MARKER_REMOVED = 21;
+        private const int MARKER_CHANGED = 22;
+        private const int INDICATOR_CHANGE = 8;
 
         private static readonly Color AddedColor = Color.FromArgb(232, 248, 232);
-        private static readonly Color AddedEmphasisColor = Color.FromArgb(205, 239, 205);
         private static readonly Color RemovedColor = Color.FromArgb(251, 232, 232);
-        private static readonly Color RemovedEmphasisColor = Color.FromArgb(245, 210, 210);
         private static readonly Color ModifiedColor = Color.FromArgb(252, 246, 219);
-        private static readonly Color ModifiedEmphasisColor = Color.FromArgb(248, 232, 180);
-        private static readonly Color ImaginaryColor = Color.FromArgb(245, 245, 245);
-        private static readonly Color ChangedTextColor = Color.FromArgb(160, 38, 38);
+        private static readonly Color ChangeIndicatorColor = Color.FromArgb(200, 120, 0);
 
         private readonly IntPtr owner;
         private readonly Func<ComparisonDiffViewModel, ComparisonDiffHunk, ComparisonDiffActionResult> applyHunk;
         private readonly Func<ComparisonDiffActionResult> undoLastApply;
         private readonly Func<ComparisonDiffViewModel, string, ComparisonDiffActionResult> updateLocalText;
         private readonly Func<ComparisonDiffActionResult> refreshModel;
+
         private readonly Panel headerPanel;
         private readonly Label headerLabel;
         private readonly Label statusLabel;
         private readonly Label leftHeaderLabel;
         private readonly Label rightHeaderLabel;
         private readonly TableLayoutPanel contentLayout;
-        private readonly RichTextBox leftTextBox;
+        private readonly ScintillaEditorControl leftPane;
         private readonly Panel gutterPanel;
-        private readonly RichTextBox rightTextBox;
+        private readonly ScintillaEditorControl rightPane;
         private readonly Button undoButton;
         private readonly Button refreshButton;
         private readonly Button closeButton;
         private readonly ToolTip toolTip;
         private DialogHelper.ModalDialogMouseHandler? mouseHandler;
-        private readonly System.Windows.Forms.Timer localEditDebounceTimer;
 
         private readonly Dictionary<int, Button> hunkButtons = new();
-        private readonly List<int> rowStartIndices = new();
 
         private ComparisonDiffViewModel model;
+        private bool stylesConfigured;
         private bool syncingScroll;
-        private bool rebindingModel;
-        private bool suppressLocalEditEvents;
 
         public ComparisonDiffDialog(
             ComparisonDiffViewModel model,
@@ -74,17 +75,15 @@ namespace AppRefiner.Dialogs
             leftHeaderLabel = new Label();
             rightHeaderLabel = new Label();
             contentLayout = new TableLayoutPanel();
-            leftTextBox = new RichTextBox();
+            leftPane = new ScintillaEditorControl();
             gutterPanel = new Panel();
-            rightTextBox = new RichTextBox();
+            rightPane = new ScintillaEditorControl();
             undoButton = new Button();
             refreshButton = new Button();
             closeButton = new Button();
             toolTip = new ToolTip();
-            localEditDebounceTimer = new System.Windows.Forms.Timer { Interval = 250 };
 
             InitializeComponent();
-            BindModel(0);
         }
 
         private void InitializeComponent()
@@ -112,74 +111,36 @@ namespace AppRefiner.Dialogs
             contentLayout.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
             contentLayout.ColumnCount = 3;
             contentLayout.RowCount = 2;
-            contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
+            contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, 48F));
-            contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 48F));
+            contentLayout.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 50F));
             contentLayout.RowStyles.Add(new RowStyle(SizeType.Absolute, 24F));
             contentLayout.RowStyles.Add(new RowStyle(SizeType.Percent, 100F));
             contentLayout.Controls.Add(leftHeaderLabel, 0, 0);
             contentLayout.Controls.Add(rightHeaderLabel, 2, 0);
-            contentLayout.Controls.Add(leftTextBox, 0, 1);
+            contentLayout.Controls.Add(leftPane, 0, 1);
             contentLayout.Controls.Add(gutterPanel, 1, 1);
-            contentLayout.Controls.Add(rightTextBox, 2, 1);
+            contentLayout.Controls.Add(rightPane, 2, 1);
 
-            leftHeaderLabel.Dock = DockStyle.Fill;
-            leftHeaderLabel.BackColor = Color.FromArgb(230, 230, 235);
-            leftHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
-            leftHeaderLabel.Padding = new Padding(8, 0, 0, 0);
-            leftHeaderLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
+            ConfigureHeaderLabel(leftHeaderLabel);
+            ConfigureHeaderLabel(rightHeaderLabel);
 
-            rightHeaderLabel.Dock = DockStyle.Fill;
-            rightHeaderLabel.BackColor = Color.FromArgb(230, 230, 235);
-            rightHeaderLabel.TextAlign = ContentAlignment.MiddleLeft;
-            rightHeaderLabel.Padding = new Padding(8, 0, 0, 0);
-            rightHeaderLabel.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
-
-            ConfigureTextPane(leftTextBox);
-            ConfigureTextPane(rightTextBox);
-            leftTextBox.ReadOnly = false;
-            rightTextBox.ReadOnly = true;
-            leftTextBox.VScroll += TextBox_VScroll;
-            rightTextBox.VScroll += TextBox_VScroll;
-            leftTextBox.MouseWheel += TextBox_MouseWheel;
-            rightTextBox.MouseWheel += TextBox_MouseWheel;
-            leftTextBox.TextChanged += LeftTextBox_TextChanged;
-            leftTextBox.Resize += (_, _) => RepositionHunkButtons();
-            rightTextBox.Resize += (_, _) => RepositionHunkButtons();
-            localEditDebounceTimer.Tick += LocalEditDebounceTimer_Tick;
+            leftPane.Dock = DockStyle.Fill;
+            rightPane.Dock = DockStyle.Fill;
+            leftPane.ViewChanged += (_, _) => SyncFrom(leftPane, rightPane);
+            rightPane.ViewChanged += (_, _) => SyncFrom(rightPane, leftPane);
 
             gutterPanel.Dock = DockStyle.Fill;
             gutterPanel.BackColor = Color.FromArgb(245, 245, 248);
             gutterPanel.Resize += (_, _) => RepositionHunkButtons();
 
-            undoButton.Text = "Undo";
-            undoButton.Size = new Size(100, 30);
-            undoButton.Location = new Point(756, 708);
-            undoButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            undoButton.BackColor = Color.FromArgb(108, 117, 125);
-            undoButton.ForeColor = Color.White;
-            undoButton.FlatStyle = FlatStyle.Flat;
-            undoButton.FlatAppearance.BorderSize = 0;
-            undoButton.Click += UndoButton_Click;
+            ConfigureButton(undoButton, "Undo", new Point(756, 708), Color.FromArgb(108, 117, 125));
+            undoButton.Click += (s, e) => ApplyActionResult(undoLastApply());
 
-            refreshButton.Text = "Refresh";
-            refreshButton.Size = new Size(100, 30);
-            refreshButton.Location = new Point(876, 708);
-            refreshButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            refreshButton.BackColor = Color.FromArgb(0, 122, 204);
-            refreshButton.ForeColor = Color.White;
-            refreshButton.FlatStyle = FlatStyle.Flat;
-            refreshButton.FlatAppearance.BorderSize = 0;
-            refreshButton.Click += RefreshButton_Click;
+            ConfigureButton(refreshButton, "Refresh", new Point(876, 708), Color.FromArgb(0, 122, 204));
+            refreshButton.Click += (s, e) => ApplyActionResult(refreshModel());
 
-            closeButton.Text = "Close";
-            closeButton.Size = new Size(100, 30);
-            closeButton.Location = new Point(996, 708);
-            closeButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            closeButton.BackColor = Color.FromArgb(100, 100, 100);
-            closeButton.ForeColor = Color.White;
-            closeButton.FlatStyle = FlatStyle.Flat;
-            closeButton.FlatAppearance.BorderSize = 0;
+            ConfigureButton(closeButton, "Close", new Point(996, 708), Color.FromArgb(100, 100, 100));
             closeButton.Click += (s, e) =>
             {
                 DialogResult = DialogResult.Cancel;
@@ -208,130 +169,210 @@ namespace AppRefiner.Dialogs
             ResumeLayout(false);
         }
 
-        private static void ConfigureTextPane(RichTextBox textBox)
+        private static void ConfigureHeaderLabel(Label label)
         {
-            textBox.Dock = DockStyle.Fill;
-            textBox.BorderStyle = BorderStyle.FixedSingle;
-            textBox.ReadOnly = true;
-            textBox.Font = new Font("Consolas", 10F, FontStyle.Regular, GraphicsUnit.Point);
-            textBox.WordWrap = false;
-            textBox.ScrollBars = RichTextBoxScrollBars.Both;
-            textBox.BackColor = Color.White;
-            textBox.HideSelection = false;
-            textBox.DetectUrls = false;
-            textBox.Multiline = true;
-            textBox.ShortcutsEnabled = true;
+            label.Dock = DockStyle.Fill;
+            label.BackColor = Color.FromArgb(230, 230, 235);
+            label.TextAlign = ContentAlignment.MiddleLeft;
+            label.Padding = new Padding(8, 0, 0, 0);
+            label.Font = new Font("Segoe UI", 9F, FontStyle.Bold, GraphicsUnit.Point);
+        }
+
+        private static void ConfigureButton(Button button, string text, Point location, Color back)
+        {
+            button.Text = text;
+            button.Size = new Size(100, 30);
+            button.Location = location;
+            button.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
+            button.BackColor = back;
+            button.ForeColor = Color.White;
+            button.FlatStyle = FlatStyle.Flat;
+            button.FlatAppearance.BorderSize = 0;
+        }
+
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+
+            if (owner != IntPtr.Zero)
+            {
+                WindowHelper.CenterFormOnWindow(this, owner);
+            }
+
+            if (Modal && owner != IntPtr.Zero)
+            {
+                mouseHandler = new DialogHelper.ModalDialogMouseHandler(this, headerPanel, owner);
+            }
+
+            // If hosting failed, say so plainly rather than showing two empty panes.
+            if (!leftPane.IsHosted || !rightPane.IsHosted)
+            {
+                string detail = leftPane.HostError ?? rightPane.HostError ?? "unknown error";
+                statusLabel.ForeColor = Color.Firebrick;
+                statusLabel.Text = $"Could not host Scintilla diff panes: {detail}";
+                return;
+            }
+
+            ConfigureStyles();
+            BindModel(0);
+        }
+
+        private void ConfigureStyles()
+        {
+            if (stylesConfigured)
+            {
+                return;
+            }
+
+            foreach (var pane in new[] { leftPane, rightPane })
+            {
+                pane.SetReadOnly(true);
+                pane.DefineLineMarker(MARKER_ADDED, AddedColor);
+                pane.DefineLineMarker(MARKER_REMOVED, RemovedColor);
+                pane.DefineLineMarker(MARKER_CHANGED, ModifiedColor);
+                pane.DefineChangeIndicator(INDICATOR_CHANGE, ChangeIndicatorColor, 80);
+            }
+
+            stylesConfigured = true;
         }
 
         private void BindModel(int preservedFirstVisibleLine)
         {
-            rebindingModel = true;
-            suppressLocalEditEvents = true;
-            try
-            {
-                headerLabel.Text = model.Title;
-                Text = model.Title;
-                leftHeaderLabel.Text = $"  {model.LocalSourceName}";
-                rightHeaderLabel.Text = $"  {model.RemoteSourceName}";
+            headerLabel.Text = model.Title;
+            Text = model.Title;
+            leftHeaderLabel.Text = $"  {model.LocalSourceName}";
+            rightHeaderLabel.Text = $"  {model.RemoteSourceName}";
 
-                statusLabel.Text = model.HasDifferences
-                    ? $"{model.Hunks.Count} hunk(s) available"
-                    : "No changes detected.";
+            statusLabel.ForeColor = SystemColors.ControlText;
+            statusLabel.Text = model.HasDifferences
+                ? $"{model.Hunks.Count} hunk(s) — click an arrow to pull the comparison side into the local editor."
+                : "No differences.";
 
-                if (model.HasDifferences && model.UsesWholeDocumentApply)
-                {
-                    statusLabel.Text += "  SQL apply uses the full comparison definition.";
-                }
+            // Load the real (unpadded) document text into each pane; alignment is applied as
+            // annotations afterward so the underlying text stays pristine.
+            leftPane.ClearAnnotations();
+            rightPane.ClearAnnotations();
+            leftPane.ClearLineMarkers(MARKER_ADDED);
+            leftPane.ClearLineMarkers(MARKER_REMOVED);
+            leftPane.ClearLineMarkers(MARKER_CHANGED);
+            rightPane.ClearLineMarkers(MARKER_ADDED);
+            rightPane.ClearLineMarkers(MARKER_REMOVED);
+            rightPane.ClearLineMarkers(MARKER_CHANGED);
 
-                rowStartIndices.Clear();
-                leftTextBox.Clear();
-                rightTextBox.Clear();
+            leftPane.SetText(model.LocalDisplayText);
+            rightPane.SetText(model.RemoteDisplayText);
+            leftPane.SetReadOnly(true);
+            rightPane.SetReadOnly(true);
 
-                leftTextBox.SuspendLayout();
-                rightTextBox.SuspendLayout();
+            ApplyDecorationsAndAlignment();
 
-                for (int i = 0; i < model.Rows.Count; i++)
-                {
-                    var row = model.Rows[i];
-                    rowStartIndices.Add(leftTextBox.TextLength);
-
-                    AppendLine(leftTextBox, row.LeftText, row.LeftChangeType, row.LeftText, row.RightText);
-                    AppendLine(rightTextBox, row.RightText, row.RightChangeType, row.RightText, row.LeftText);
-                }
-
-                leftTextBox.SelectionLength = 0;
-                rightTextBox.SelectionLength = 0;
-                leftTextBox.SelectionStart = 0;
-                rightTextBox.SelectionStart = 0;
-
-                leftTextBox.ResumeLayout();
-                rightTextBox.ResumeLayout();
-
-                RebuildGutterButtons();
-                RestoreVisibleLine(preservedFirstVisibleLine);
-            }
-            finally
-            {
-                suppressLocalEditEvents = false;
-                rebindingModel = false;
-            }
-
+            RebuildGutterButtons();
+            leftPane.SetFirstVisibleLine(preservedFirstVisibleLine);
+            rightPane.SetFirstVisibleLine(preservedFirstVisibleLine);
             RepositionHunkButtons();
         }
 
-        private void AppendLine(RichTextBox textBox, string text, ChangeType changeType, string primaryText, string comparisonText)
+        /// <summary>
+        /// Walks the aligned row model once to apply per-line background markers, intra-line change
+        /// indicators, and blank-line alignment annotations to each pane.
+        /// </summary>
+        private void ApplyDecorationsAndAlignment()
         {
-            string lineText = text ?? string.Empty;
-            int lineStart = textBox.TextLength;
-            textBox.AppendText(lineText + Environment.NewLine);
-            int lineLength = lineText.Length;
-            int lineEnd = lineStart + lineLength;
+            int leftLine = 0;
+            int rightLine = 0;
+            var leftFill = new Dictionary<int, int>();
+            var rightFill = new Dictionary<int, int>();
 
-            ApplyWholeLineStyle(textBox, lineStart, lineLength, changeType);
-
-            if (lineLength > 0 && changeType == ChangeType.Modified)
+            foreach (var row in model.Rows)
             {
-                var changedSpan = FindChangedSpan(primaryText ?? string.Empty, comparisonText ?? string.Empty);
-                if (changedSpan.Length > 0)
+                bool leftReal = row.LeftChangeType != ChangeType.Imaginary;
+                bool rightReal = row.RightChangeType != ChangeType.Imaginary;
+
+                if (leftReal)
                 {
-                    textBox.Select(lineStart + changedSpan.Start, changedSpan.Length);
-                    textBox.SelectionBackColor = ModifiedEmphasisColor;
-                    textBox.SelectionColor = ChangedTextColor;
-                    textBox.SelectionFont = new Font(textBox.Font, FontStyle.Bold);
+                    int marker = MarkerForChange(row.LeftChangeType);
+                    if (marker >= 0)
+                    {
+                        leftPane.AddLineMarker(marker, leftLine);
+                    }
+
+                    if (row.LeftChangeType == ChangeType.Modified)
+                    {
+                        FillChangeIndicator(leftPane, leftLine, row.LeftText, row.RightText);
+                    }
+                }
+
+                if (rightReal)
+                {
+                    int marker = MarkerForChange(row.RightChangeType);
+                    if (marker >= 0)
+                    {
+                        rightPane.AddLineMarker(marker, rightLine);
+                    }
+
+                    if (row.RightChangeType == ChangeType.Modified)
+                    {
+                        FillChangeIndicator(rightPane, rightLine, row.RightText, row.LeftText);
+                    }
+                }
+
+                // A padding (imaginary) row on one side means the other side has a line here that
+                // this side lacks; add a filler line after this side's previous real line to align.
+                if (!leftReal && rightReal)
+                {
+                    int anchor = Math.Max(0, leftLine - 1);
+                    leftFill[anchor] = leftFill.GetValueOrDefault(anchor) + 1;
+                }
+                else if (leftReal && !rightReal)
+                {
+                    int anchor = Math.Max(0, rightLine - 1);
+                    rightFill[anchor] = rightFill.GetValueOrDefault(anchor) + 1;
+                }
+
+                if (leftReal)
+                {
+                    leftLine++;
+                }
+
+                if (rightReal)
+                {
+                    rightLine++;
                 }
             }
 
-            textBox.Select(lineEnd, 0);
-            textBox.SelectionBackColor = textBox.BackColor;
-            textBox.SelectionColor = Color.Black;
-            textBox.SelectionFont = textBox.Font;
-        }
-
-        private static void ApplyWholeLineStyle(RichTextBox textBox, int start, int length, ChangeType changeType)
-        {
-            textBox.Select(start, Math.Max(0, length));
-            textBox.SelectionColor = Color.Black;
-            textBox.SelectionFont = textBox.Font;
-
-            switch (changeType)
+            foreach (var (line, count) in leftFill)
             {
-                case ChangeType.Inserted:
-                    textBox.SelectionBackColor = AddedColor;
-                    break;
-                case ChangeType.Deleted:
-                    textBox.SelectionBackColor = RemovedColor;
-                    break;
-                case ChangeType.Modified:
-                    textBox.SelectionBackColor = ModifiedColor;
-                    break;
-                case ChangeType.Imaginary:
-                    textBox.SelectionBackColor = ImaginaryColor;
-                    break;
-                default:
-                    textBox.SelectionBackColor = Color.White;
-                    break;
+                leftPane.SetAlignmentAnnotation(line, count);
+            }
+
+            foreach (var (line, count) in rightFill)
+            {
+                rightPane.SetAlignmentAnnotation(line, count);
             }
         }
+
+        private static void FillChangeIndicator(ScintillaEditorControl pane, int docLine, string lineText, string otherText)
+        {
+            var span = FindChangedSpan(lineText ?? string.Empty, otherText ?? string.Empty);
+            if (span.Length <= 0)
+            {
+                return;
+            }
+
+            // Scintilla positions are UTF-8 byte offsets; convert the char span accordingly.
+            int lineStart = pane.PositionFromLine(docLine);
+            int byteStart = Encoding.UTF8.GetByteCount((lineText ?? string.Empty).Substring(0, span.Start));
+            int byteLen = Encoding.UTF8.GetByteCount((lineText ?? string.Empty).Substring(span.Start, span.Length));
+            pane.FillIndicatorRange(INDICATOR_CHANGE, lineStart + byteStart, byteLen);
+        }
+
+        private static int MarkerForChange(ChangeType changeType) => changeType switch
+        {
+            ChangeType.Inserted => MARKER_ADDED,
+            ChangeType.Deleted => MARKER_REMOVED,
+            ChangeType.Modified => MARKER_CHANGED,
+            _ => -1
+        };
 
         private static (int Start, int Length) FindChangedSpan(string left, string right)
         {
@@ -368,6 +409,7 @@ namespace AppRefiner.Dialogs
 
             foreach (var hunk in model.Hunks)
             {
+                // SQL uses a single whole-document apply (normalized display); only show one arrow.
                 if (model.UsesWholeDocumentApply && hunk.Id > 1)
                 {
                     continue;
@@ -376,11 +418,11 @@ namespace AppRefiner.Dialogs
                 Button button = new()
                 {
                     Width = 34,
-                    Height = 24,
+                    Height = 22,
                     FlatStyle = FlatStyle.Flat,
                     BackColor = Color.FromArgb(0, 122, 204),
                     ForeColor = Color.White,
-                    Text = "\u2190",
+                    Text = "←",
                     Font = new Font("Segoe UI Symbol", 11F, FontStyle.Bold, GraphicsUnit.Point),
                     Tag = hunk.Id,
                     TabStop = false
@@ -388,7 +430,9 @@ namespace AppRefiner.Dialogs
 
                 button.FlatAppearance.BorderSize = 0;
                 button.Click += GutterButton_Click;
-                toolTip.SetToolTip(button, model.UsesWholeDocumentApply ? "Apply full comparison definition to local editor" : $"Apply hunk {hunk.Id} to local editor");
+                toolTip.SetToolTip(button, model.UsesWholeDocumentApply
+                    ? "Apply full comparison definition to local editor"
+                    : $"Pull hunk {hunk.Id} into local editor");
 
                 hunkButtons[hunk.Id] = button;
                 gutterPanel.Controls.Add(button);
@@ -397,7 +441,7 @@ namespace AppRefiner.Dialogs
 
         private void RepositionHunkButtons()
         {
-            if (rowStartIndices.Count == 0 || leftTextBox.IsDisposed || !leftTextBox.IsHandleCreated)
+            if (!leftPane.IsHosted)
             {
                 return;
             }
@@ -409,13 +453,17 @@ namespace AppRefiner.Dialogs
                     continue;
                 }
 
-                int rowIndex = Math.Clamp(hunk.StartRowIndex, 0, rowStartIndices.Count - 1);
-                int charIndex = rowStartIndices[rowIndex];
-                Point textPoint = leftTextBox.GetPositionFromCharIndex(charIndex);
-                int y = textPoint.Y + 1;
+                // Anchor the arrow to the side that actually holds the changed block: the remote
+                // (right) pane when the hunk has remote lines — which is both where the pulled
+                // content lives and where a pure insertion renders (the local side is just a blank
+                // alignment gap there). Fall back to the local pane for pure deletions.
+                bool remoteHasContent = hunk.RemoteEndLine > hunk.RemoteStartLine;
+                int y = remoteHasContent
+                    ? rightPane.PointYFromLine(hunk.RemoteStartLine)
+                    : leftPane.PointYFromLine(hunk.LocalStartLine);
 
                 button.Left = Math.Max(7, (gutterPanel.ClientSize.Width - button.Width) / 2);
-                button.Top = Math.Max(2, y);
+                button.Top = Math.Max(2, y + 1);
                 button.Visible = y >= 0 && y < gutterPanel.ClientSize.Height - button.Height;
             }
         }
@@ -433,57 +481,32 @@ namespace AppRefiner.Dialogs
                 return;
             }
 
-            int preservedLine = GetFirstVisibleLine(leftTextBox);
-            ApplyActionResult(applyHunk(model, hunk), preservedLine);
+            ApplyActionResult(applyHunk(model, hunk));
         }
 
-        private void LeftTextBox_TextChanged(object? sender, EventArgs e)
+        private void SyncFrom(ScintillaEditorControl source, ScintillaEditorControl target)
         {
-            if (rebindingModel || suppressLocalEditEvents)
+            if (syncingScroll || !source.IsHosted || !target.IsHosted)
             {
                 return;
             }
 
-            localEditDebounceTimer.Stop();
-            localEditDebounceTimer.Start();
-        }
-
-        private void LocalEditDebounceTimer_Tick(object? sender, EventArgs e)
-        {
-            localEditDebounceTimer.Stop();
-
-            if (rebindingModel || suppressLocalEditEvents)
+            syncingScroll = true;
+            try
             {
-                return;
+                target.SetFirstVisibleLine(source.GetFirstVisibleLine());
+                RepositionHunkButtons();
             }
-
-            string currentLocalText = leftTextBox.Text.Replace("\r\n", "\n");
-            string modelLocalText = model.LocalDisplayText.Replace("\r\n", "\n");
-            if (string.Equals(currentLocalText, modelLocalText, StringComparison.Ordinal))
+            finally
             {
-                return;
+                syncingScroll = false;
             }
-
-            int preservedLine = GetFirstVisibleLine(leftTextBox);
-            ApplyActionResult(updateLocalText(model, currentLocalText), preservedLine);
         }
 
-        private void UndoButton_Click(object? sender, EventArgs e)
+        private void ApplyActionResult(ComparisonDiffActionResult result)
         {
-            localEditDebounceTimer.Stop();
-            int preservedLine = GetFirstVisibleLine(leftTextBox);
-            ApplyActionResult(undoLastApply(), preservedLine);
-        }
+            int preservedLine = leftPane.IsHosted ? leftPane.GetFirstVisibleLine() : 0;
 
-        private void RefreshButton_Click(object? sender, EventArgs e)
-        {
-            localEditDebounceTimer.Stop();
-            int preservedLine = GetFirstVisibleLine(leftTextBox);
-            ApplyActionResult(refreshModel(), preservedLine);
-        }
-
-        private void ApplyActionResult(ComparisonDiffActionResult result, int preservedFirstVisibleLine)
-        {
             if (!string.IsNullOrWhiteSpace(result.Message))
             {
                 new MessageBoxDialog(result.Message, result.MessageTitle, MessageBoxButtons.OK, owner)
@@ -493,103 +516,15 @@ namespace AppRefiner.Dialogs
             if (result.UpdatedModel != null)
             {
                 model = result.UpdatedModel;
-                BindModel(preservedFirstVisibleLine);
+                BindModel(preservedLine);
             }
-        }
-
-        private void TextBox_VScroll(object? sender, EventArgs e)
-        {
-            if (rebindingModel || syncingScroll || sender is not RichTextBox source)
-            {
-                return;
-            }
-
-            SyncOtherPane(source);
-        }
-
-        private void TextBox_MouseWheel(object? sender, MouseEventArgs e)
-        {
-            if (rebindingModel || syncingScroll || sender is not RichTextBox source)
-            {
-                return;
-            }
-
-            BeginInvoke(new Action(() =>
-            {
-                if (!IsDisposed)
-                {
-                    SyncOtherPane(source);
-                }
-            }));
-        }
-
-        private void SyncOtherPane(RichTextBox source)
-        {
-            RichTextBox target = ReferenceEquals(source, leftTextBox) ? rightTextBox : leftTextBox;
-            int visibleLine = GetFirstVisibleLine(source);
-            syncingScroll = true;
-            try
-            {
-                SetFirstVisibleLine(target, visibleLine);
-                RepositionHunkButtons();
-            }
-            finally
-            {
-                syncingScroll = false;
-            }
-        }
-
-        private void RestoreVisibleLine(int visibleLine)
-        {
-            syncingScroll = true;
-            try
-            {
-                SetFirstVisibleLine(leftTextBox, visibleLine);
-                SetFirstVisibleLine(rightTextBox, visibleLine);
-            }
-            finally
-            {
-                syncingScroll = false;
-            }
-        }
-
-        private static int GetFirstVisibleLine(RichTextBox textBox)
-        {
-            return (int)SendMessage(textBox.Handle, EM_GETFIRSTVISIBLELINE, IntPtr.Zero, IntPtr.Zero);
-        }
-
-        private static void SetFirstVisibleLine(RichTextBox textBox, int targetLine)
-        {
-            int current = GetFirstVisibleLine(textBox);
-            int delta = targetLine - current;
-            if (delta != 0)
-            {
-                SendMessage(textBox.Handle, EM_LINESCROLL, IntPtr.Zero, new IntPtr(delta));
-            }
-        }
-
-        protected override void OnShown(EventArgs e)
-        {
-            base.OnShown(e);
-
-            if (owner != IntPtr.Zero)
-            {
-                WindowHelper.CenterFormOnWindow(this, owner);
-            }
-
-            if (Modal && owner != IntPtr.Zero)
-            {
-                mouseHandler = new DialogHelper.ModalDialogMouseHandler(this, headerPanel, owner);
-            }
-
-            RepositionHunkButtons();
         }
 
         protected override bool ProcessCmdKey(ref Message msg, Keys keyData)
         {
             if (keyData == (Keys.Control | Keys.Z))
             {
-                UndoButton_Click(this, EventArgs.Empty);
+                ApplyActionResult(undoLastApply());
                 return true;
             }
 
@@ -611,8 +546,6 @@ namespace AppRefiner.Dialogs
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
-            localEditDebounceTimer.Stop();
-            localEditDebounceTimer.Dispose();
             mouseHandler?.Dispose();
             mouseHandler = null;
             foreach (var button in hunkButtons.Values)

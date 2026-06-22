@@ -426,21 +426,48 @@ next item until verify passes.
       hunk shading, changed-span emphasis, and gutter arrows are layered on
       top as view state. This is the gating work before step 4 can be
       considered complete.
+
+      **Spike result (resolved):** the embedded-Scintilla feasibility spike
+      SUCCEEDED — a native Scintilla control hosts inside the AppRefiner
+      WinForms diff dialog, and blank-line annotations (alignment),
+      background markers (line shading), and an indicator (changed spans)
+      all render correctly with no document-text mutation. The
+      Scintilla-panes architecture (§4.13) is therefore ADOPTED, not
+      hypothetical. Implementation lives in
+      `AppRefiner/Dialogs/ScintillaEditorControl.cs` (native host) and the
+      rewritten `AppRefiner/Dialogs/ComparisonDiffDialog.cs` (two panes,
+      annotation alignment, markers/indicators, synced scroll, per-hunk
+      pull). The RichTextBox prototype has been replaced in place.
+
       **Subtasks for step 4:**
-      - run a feasibility spike for two embedded local Scintilla panes in
-        the diff dialog
-      - if feasible, adopt Scintilla as the pane/control strategy
-      - separate raw document text from visual diff alignment/mapping
-      - keep the comparison side cached and read-only
-      - make local typing update the local document and recompute the diff
-        after a short debounce without rebinding the entire surface
-      - render hunk shading, changed spans, and gutter arrows as overlays /
-        indicators / markers rather than by mutating pane text
-      - keep synchronized scrolling without tearing the view down on every
-        change
-      - preserve per-hunk apply and grouped undo on top of that model
-      - for SQL, continue using normalized display comparison, but keep raw
-        text available for apply semantics
+      - [x] run a feasibility spike for two embedded local Scintilla panes
+        in the diff dialog
+      - [x] if feasible, adopt Scintilla as the pane/control strategy
+      - [x] separate raw document text from visual diff alignment/mapping
+        (panes hold real text; alignment is annotations)
+      - [x] keep the comparison side cached and read-only
+      - [x] render hunk shading, changed spans, and gutter arrows as overlays
+        / indicators / markers rather than by mutating pane text
+      - [x] keep synchronized scrolling without tearing the view down on
+        every change
+      - [x] preserve per-hunk apply and grouped undo on top of that model
+      - [ ] **make local typing update the local document and recompute the
+        diff after a short debounce without rebinding the entire surface**
+        — deferred in the spike (both panes are currently read-only); this
+        is the main remaining behavior to restore. Make the local pane
+        editable, debounce edits, push to the real App Designer editor, and
+        re-diff in place.
+      - [ ] verify blank-annotation alignment counts are exactly right (watch
+        for an off-by-one, especially the Scintilla line-0 annotation
+        limitation noted in §8.1) and that intra-line indicator spans use
+        correct UTF-8 byte offsets on non-ASCII lines
+      - [ ] for SQL, continue using normalized display comparison, but keep
+        raw text available for apply semantics (wired in
+        `EditorComparisonService`; verify end-to-end against a real SQL
+        object)
+      - [ ] polish (optional, post-baseline): a PeopleCode/SQL lexer for
+        syntax coloring in the panes; hunk-to-hunk navigation (n/N or F8);
+        and eventually a ComparePlus-style overview/nav strip (v2, see §8.1)
       **Verify:** typing a single character in the local pane should not
       cause a visible full-pane redraw; newly introduced differences should
       appear smoothly after the debounce; manual selection/copy should work
@@ -465,3 +492,172 @@ non-critical/sandbox environments first, and confirm the "pull into
 local" action never fires accidentally (e.g. double-click protection,
 clear visual distinction between "view" and "apply" controls) given it
 mutates code you may not have intended to change yet.
+
+## 8. Research findings & prior art (in progress)
+
+This section accumulates external research that should inform the step-4
+rendering/interaction rearchitecture. It is reference material, not
+committed design — promote anything here into §4 decisions once it is
+settled.
+
+### 8.0 Target interaction model: merge-tool ergonomics, directional
+The UX we are actually aiming for is a **3-way-merge-tool-style**
+interface (think Beyond Compare's merge view, KDiff3, Meld 3-way,
+Araxis Merge), NOT a read-only diff report. The important caveat:
+
+- The comparison/remote pane (fetched from the other environment's DB) is
+  **read-only**, and there is no common-ancestor "base" version available.
+- So this is not a true 3-way merge. Functionally it is a **directional
+  2-way merge**: changes only ever flow remote → local, and the only
+  editable surface is the local pane (which is the live App Designer
+  editor buffer).
+- We still want the merge-tool *ergonomics*: two aligned document panes, a
+  center gutter with directional apply controls per change block, live
+  editing on the local side, and synchronized navigation/scroll.
+
+Further research to do here: look at how the established merge tools above
+present a 2-of-3 (one side locked) merge, and how they handle "accept
+this block from the other side" affordances and re-diff-on-edit. Capture
+findings as 8.x subsections.
+
+### 8.1 Prior art: ComparePlus (Notepad++ Compare plugin) — GPL, clean-room only
+ComparePlus is the closest direct prior art: it diffs two **Scintilla**
+documents side-by-side, exactly the surface step 4 targets. Source was
+reviewed locally (the `comparePlus-cp_3.0.0/` reference tree, which is
+gitignored, not vendored).
+
+**LICENSE CONSTRAINT (hard):** ComparePlus is **GPL v3**; AppRefiner is
+MIT. We may **not** copy or adapt any ComparePlus code — doing so would
+force AppRefiner to become GPL. Everything below is pattern/architecture
+only, to be reimplemented clean-room in C# from understanding. Do not
+transcribe its source.
+
+**How it renders a diff — all without mutating document text** (this is
+the property §4.10 / §4.12 require, and ComparePlus shows the concrete
+Scintilla mechanism for each):
+
+- **Alignment = blank line annotations.** Documents stay pristine; blank
+  styled annotations (`SCI_ANNOTATIONSETTEXT`, with a dedicated extended
+  style allocated via `SCI_ALLOCATEEXTENDEDSTYLES` /
+  `SCI_ANNOTATIONSETSTYLEOFFSET` / `SCI_STYLESETEOLFILLED`) are added
+  below lines to push the opposite side's matching lines into horizontal
+  alignment. An "alignment info" list of `(mainLine, subLine, diffMask)`
+  pairs drives it; annotation counts are set until
+  `VISIBLEFROMDOCLINE(main) == VISIBLEFROMDOCLINE(sub)` for paired lines.
+  **Gotcha:** Scintilla cannot annotate line 0, so line-0 alignment is
+  special-cased.
+- **Line shading = background markers.** `SCI_MARKERDEFINE … SC_MARK_BACKGROUND`
+  + `SCI_MARKERSETBACK` for added/removed/changed/moved lines; applied
+  with `SCI_MARKERADD`, cleared with `SCI_MARKERDELETEALL`. Per-line color
+  with no text styling.
+- **Changed-span emphasis = an indicator.** A Scintilla indicator
+  (`INDIC_ROUNDBOX`, alpha, `SC_INDICFLAG_VALUEFORE`) filled over the exact
+  changed character ranges within a modified line.
+- **Gutter icons = RGBA image markers.** `SCI_MARKERDEFINERGBAIMAGE`
+  routed to a margin via `SCI_SETMARGINMASKN` (added/changed/removed/moved
+  icons, plus an arrow symbol) — the natural place to mark an actionable
+  hunk.
+- **Scroll sync / navigation** rides on a doc↔visible line mapping helper
+  set (`SCI_VISIBLEFROMDOCLINE` / `SCI_DOCLINEFROMVISIBLE`, accounting for
+  annotations and wrap). A separate overview/navigation bar renders a
+  whole-file "map" of diff locations (a possible v2 nicety for us).
+
+**Two caveats before leaning on it:**
+
+1. ComparePlus uses Notepad++'s **built-in** dual editor views
+   (`MAIN_VIEW` / `SUB_VIEW`), not Scintilla controls hosted inside a
+   dialog. It therefore proves the annotation/marker/indicator rendering
+   approach is correct, but does **not** validate §4.13's premise of
+   embedding two Scintilla controls in an AppRefiner WinForms dialog — nor
+   where that dialog's Scintilla even comes from (AppRefiner's own process
+   has no Scintilla; App Designer's lives cross-process). That feasibility
+   spike (§7 step 4, first subtask) remains the true gating decision, and
+   this whole clean rendering approach is only available if it succeeds.
+2. ComparePlus is a **viewer/navigator, not a merge tool** — it has no
+   "apply this block to the other side." So there is no prior art to
+   borrow for our directional apply; only the visual vocabulary (mark the
+   actionable hunk with a margin arrow) transfers.
+
+**Net takeaway:** if the embedded-Scintilla spike succeeds, adopt the
+ComparePlus rendering vocabulary clean-room — annotations for alignment,
+background markers for line shading, an indicator for changed spans, RGBA
+margin markers for gutter affordances, and visible/doc line mapping for
+sync. This replaces the prototype's text-mutation alignment (the §4.12
+dead end) with a real view layer.
+
+### 8.2 Prior art: VS Code (microsoft/vscode) — MIT, reference-friendly
+VS Code's built-in compare is the experience we are ultimately trying to
+mimic. Source reviewed via GitHub (not vendored locally).
+
+**LICENSE (favorable):** the `microsoft/vscode` repository is **MIT** —
+only the Microsoft-branded *build* is proprietary. So unlike ComparePlus
+(GPL), we may reference and adapt its logic within MIT compatibility. It
+is TypeScript on the Monaco editor, so we reimplement concepts in C#
+regardless, but we are not restricted to clean-room-from-memory.
+
+**It is actually two distinct features — and we want a blend of both:**
+
+1. **Diff editor** (side-by-side compare) — the closest match to our
+   render. Key pieces:
+   - Diff data model in `src/vs/editor/common/diff/rangeMapping.ts`: a
+     list of `LineRangeMapping`, each carrying *nested* character-level
+     `RangeMapping`s. This is a cleaner two-tier (line + char) model than
+     DiffPlex's line-piece output, where we currently derive char spans
+     ourselves (`FindChangedSpan`). DiffPlex remains adequate; note the
+     richer model only if our char-span heuristic proves insufficient.
+   - **Alignment = view zones / virtual filler lines**, not text mutation
+     — the same mechanism as ComparePlus annotations, independently
+     confirmed. Monaco view zones ≈ Scintilla annotations.
+   - **Two-tier highlighting**: light line-background for added/removed/
+     changed, plus a darker character-level highlight for the exact
+     changed span (decorations in
+     `src/vs/editor/browser/widget/diffEditor/registrations.contribution.ts`
+     + `style.css`). Maps to Scintilla background-markers (line) +
+     indicator (char) — the §8.1 split.
+   - Side-by-side and inline (unified) layouts with synchronized scroll.
+
+2. **Merge editor** (true 3-way) — informs the *interaction state* model,
+   but most of it does NOT apply to us. It manages four docs (Base,
+   Input1=current, Input2=incoming, Result) and a `ModifiedBaseRange` per
+   conflict with observable state
+   `accepted ∈ {base, input1, input2, both, unrecognized}` + per-input
+   `handled` flags; accepting a resolution runs `getEditForBase(state)` →
+   removes conflicting diffs from Result → `applyEditRelativeToOriginal()`.
+   **Why most of it doesn't apply:** our feature has **no base/common
+   ancestor** and only **one editable side**, so there is no two-input
+   conflict to resolve. Our model collapses to "for each diff between
+   local(=Result) and remote, accept-incoming = replace the local range
+   with remote text" — exactly what `EditorComparisonService.ApplyHunk`
+   already does. What genuinely transfers:
+   - The **observable, recompute-on-result-change** pattern (the model
+     re-derives conflict/diff state when Result changes, rather than
+     tearing down and rebuilding) — corroborates §4.8 and §4.11
+     (recompute in place after apply/edit; debounce local edits).
+   - The `getEdit → apply-to-result` edit shape — same as our TextEdit /
+     `ReplaceTextRange` apply.
+   - The `unrecognized` state idea (manual edits no longer matching a
+     clean resolution). Our simpler equivalent is §4.14: detect a stale
+     local snapshot and force a refresh instead of fuzzy relocation.
+
+**Reframed target (supersedes the loose "3-way merge" wording in §8.0):**
+what we want is VS Code's **diff-editor rendering** (view-zone alignment +
+two-tier highlighting + synced scroll) plus a **single-direction
+"accept incoming" apply** distilled from the merge editor — without the
+base/input1/input2 conflict-resolution machinery, which a directional,
+no-ancestor, read-only-remote feature does not need.
+
+**Clean-room reference port worth studying:** `esmuellert/codediff.nvim`
+reimplements VS Code's diff algorithm (Myers + char-level refinement) and
+its two-tier rendering in a **non-Monaco** editor (Neovim) — i.e. the same
+"port VS Code diff logic to a different editor surface" problem we have. It
+explicitly mirrors `rangeMapping.ts` data structures and the
+`registrations.contribution.ts` decoration model, and uses virtual filler
+lines for side-by-side alignment. Useful as a concrete, digestible model
+for how the VS Code concepts survive translation to a non-Monaco control.
+
+**Files for a future deeper dive:**
+- `src/vs/editor/common/diff/rangeMapping.ts` — line+char diff data model
+- `src/vs/editor/browser/widget/diffEditor/` — diff rendering, view-zone
+  alignment, decoration registrations
+- `src/vs/workbench/contrib/mergeEditor/browser/model/mergeEditorModel.ts`
+  — 3-way state model (for the observable/recompute pattern only)
