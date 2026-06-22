@@ -408,3 +408,6 @@ AppRefiner*.zip
 
 # NppVim upstream source — porting reference only, not part of AppRefiner
 NppVim-1.14.0.0/
+
+# ComparePlus upstream source — diff-tool reference only, not part of AppRefiner
+comparePlus-cp_3.0.0/

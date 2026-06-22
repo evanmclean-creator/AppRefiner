@@ -89,6 +89,7 @@ namespace AppRefiner.Dialogs
             this.diffTextBox.WordWrap = false;
             this.diffTextBox.ScrollBars = RichTextBoxScrollBars.Both;
             this.diffTextBox.BackColor = Color.White;
+            this.diffTextBox.Anchor = AnchorStyles.Top | AnchorStyles.Bottom | AnchorStyles.Left | AnchorStyles.Right;
 
             // closeButton
             this.closeButton.Text = "Close";
@@ -99,6 +100,7 @@ namespace AppRefiner.Dialogs
             this.closeButton.ForeColor = Color.White;
             this.closeButton.FlatStyle = FlatStyle.Flat;
             this.closeButton.FlatAppearance.BorderSize = 0;
+            this.closeButton.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
             this.closeButton.Click += (s, e) =>
             {
                 this.DialogResult = DialogResult.Cancel;
@@ -108,13 +110,15 @@ namespace AppRefiner.Dialogs
             // DiffViewDialog
             this.Text = title;
             this.ClientSize = new Size(800, 570);
+            this.MinimumSize = new Size(640, 420);
             this.Controls.Add(this.headerPanel);
             this.Controls.Add(this.diffTextBox);
             this.Controls.Add(this.closeButton);
-            this.FormBorderStyle = FormBorderStyle.None;
+            this.FormBorderStyle = FormBorderStyle.Sizable;
             this.StartPosition = FormStartPosition.Manual;
-            this.MaximizeBox = false;
-            this.MinimizeBox = false;
+            this.MaximizeBox = true;
+            this.MinimizeBox = true;
+            this.ControlBox = true;
             this.ShowInTaskbar = false;
             this.BackColor = Color.FromArgb(240, 240, 245);
             this.Padding = new Padding(1);
@@ -131,7 +135,7 @@ namespace AppRefiner.Dialogs
         /// <param name="newContent">The new content to compare</param>
         private void ShowDiffContent(string oldContent, string newContent)
         {
-            if (string.IsNullOrEmpty(oldContent) && string.IsNullOrEmpty(newContent))
+            if (string.Equals(oldContent, newContent, StringComparison.Ordinal))
             {
                 diffTextBox.Text = "No changes detected.";
                 return;
@@ -307,9 +311,11 @@ namespace AppRefiner.Dialogs
         {
             base.OnPaint(e);
 
-            // Draw a border around the form
-            using var pen = new Pen(Color.FromArgb(100, 100, 120));
-            e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            if (FormBorderStyle == FormBorderStyle.None)
+            {
+                using var pen = new Pen(Color.FromArgb(100, 100, 120));
+                e.Graphics.DrawRectangle(pen, 0, 0, Width - 1, Height - 1);
+            }
         }
 
         protected override bool ProcessDialogKey(Keys keyData)

@@ -9,6 +9,8 @@ namespace AppRefiner.Database
     /// </summary>
     public class OracleDbConnection : IDbConnection
     {
+        private static readonly object TnsAdminLock = new();
+        private static string? configuredTnsAdmin;
         private OracleConnection _connection;
         /// <summary>
         /// Gets or sets the connection string
@@ -57,9 +59,23 @@ namespace AppRefiner.Database
             /* If TNS_ADMIN setting is populated, set it here */
             if (!string.IsNullOrEmpty(Properties.Settings.Default.TNS_ADMIN))
             {
-                string TNS_ADMIN = Properties.Settings.Default.TNS_ADMIN;
-                OracleConfiguration.TnsAdmin = TNS_ADMIN;
-                _connection.TnsAdmin = TNS_ADMIN;
+                string tnsAdmin = Properties.Settings.Default.TNS_ADMIN;
+
+                lock (TnsAdminLock)
+                {
+                    if (string.IsNullOrEmpty(configuredTnsAdmin))
+                    {
+                        OracleConfiguration.TnsAdmin = tnsAdmin;
+                        configuredTnsAdmin = tnsAdmin;
+                        Debug.Log($"OracleConfiguration.TnsAdmin initialized to: {tnsAdmin}");
+                    }
+                    else if (!string.Equals(configuredTnsAdmin, tnsAdmin, StringComparison.OrdinalIgnoreCase))
+                    {
+                        Debug.Log($"OracleConfiguration.TnsAdmin already initialized to '{configuredTnsAdmin}', skipping new value '{tnsAdmin}'");
+                    }
+                }
+
+                _connection.TnsAdmin = configuredTnsAdmin ?? tnsAdmin;
                 Debug.Log($"TNS_ADMIN set to: {_connection.TnsAdmin} via settings");
             }
 

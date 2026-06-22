@@ -60,6 +60,9 @@ namespace AppRefiner
                     case "Component Interface PeopleCode":
                         return ParseComponentInterfacePeopleCode(captionWithoutType);
 
+                    case "SQL Definition":
+                        return ParseSqlDefinition(captionWithoutType);
+
                     default:
                         Debug.Log($"OpenTargetBuilder: Unknown editor type '{editorType}'");
                         return null;
@@ -453,6 +456,49 @@ namespace AppRefiner
                 OpenTargetType.ComponentInterfacePeopleCode,
                 componentInterfaceName,
                 $"Component Interface PeopleCode: {captionWithoutType}",
+                objectPairs
+            );
+        }
+
+        /// <summary>
+        /// Parses SQL Definition caption.
+        /// Example: "UM_ASC_GET_ALUMNI_POP.0" -> SQL.UM_ASC_GET_ALUMNI_POP / SQLTYPE.0
+        /// </summary>
+        private static OpenTarget? ParseSqlDefinition(string captionWithoutType)
+        {
+            if (string.IsNullOrEmpty(captionWithoutType))
+                return null;
+
+            var sqlId = captionWithoutType.Trim();
+            var sqlType = "0";
+
+            var lastDotPos = sqlId.LastIndexOf('.');
+            if (lastDotPos > 0 && lastDotPos < sqlId.Length - 1)
+            {
+                var suffix = sqlId.Substring(lastDotPos + 1);
+                if (int.TryParse(suffix, out _))
+                {
+                    sqlType = suffix;
+                    sqlId = sqlId.Substring(0, lastDotPos);
+                }
+            }
+
+            if (string.IsNullOrWhiteSpace(sqlId))
+            {
+                Debug.Log($"ParseSqlDefinition: Invalid SQL definition caption '{captionWithoutType}'");
+                return null;
+            }
+
+            List<(PSCLASSID, string)> objectPairs = new()
+            {
+                (PSCLASSID.SQL, sqlId),
+                (PSCLASSID.SQLTYPE, sqlType)
+            };
+
+            return new OpenTarget(
+                OpenTargetType.SQL,
+                sqlId,
+                $"SQL Definition: {captionWithoutType}",
                 objectPairs
             );
         }

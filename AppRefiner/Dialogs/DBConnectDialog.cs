@@ -15,6 +15,7 @@ namespace AppRefiner.Dialogs
     {
         // Data manager that will be created when connection is successful
         public IDataManager? DataManager { get; private set; }
+        public string SelectedDatabaseName => dbNameComboBox.Text;
 
         // Class to store database connection settings
         private class DbConnectionSettings
@@ -91,13 +92,21 @@ namespace AppRefiner.Dialogs
         private readonly ProgressBar loadingProgressBar;
         private bool isConnecting = false;
         private bool isInitialLoad = true;
+        private readonly string headerTitle;
+        private readonly string windowTitle;
+        private readonly string connectButtonTitle;
 
         /// <summary>
         /// Initializes a new instance of the DBConnectDialog class
         /// </summary>
         /// <param name="owner">The owner window handle</param>
         /// <param name="defaultDbName">Optional default database name to select</param>
-        public DBConnectDialog(IntPtr owner = default, string? defaultDbName = null)
+        public DBConnectDialog(
+            IntPtr owner = default,
+            string? defaultDbName = null,
+            string headerTitle = "Database Connection",
+            string windowTitle = "Connect to Database",
+            string connectButtonText = "Connect")
         {
             this.headerPanel = new Panel();
             this.headerLabel = new Label();
@@ -129,6 +138,9 @@ namespace AppRefiner.Dialogs
             this.loadingLabel = new Label();
             this.loadingProgressBar = new ProgressBar();
             this.owner = owner;
+            this.headerTitle = headerTitle;
+            this.windowTitle = windowTitle;
+            this.connectButtonTitle = connectButtonText;
 
             // Load saved settings
             LoadAllSettings();
@@ -155,7 +167,7 @@ namespace AppRefiner.Dialogs
             this.headerPanel.Controls.Add(this.headerLabel);
 
             // headerLabel
-            this.headerLabel.Text = "Database Connection";
+            this.headerLabel.Text = headerTitle;
             this.headerLabel.ForeColor = Color.White;
             this.headerLabel.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
             this.headerLabel.Dock = DockStyle.Fill;
@@ -337,7 +349,7 @@ namespace AppRefiner.Dialogs
             this.savePasswordCheckBox.CheckAlign = ContentAlignment.MiddleLeft;
 
             // connectButton
-            this.connectButton.Text = "Connect";
+            this.connectButton.Text = connectButtonTitle;
             this.connectButton.Size = new Size(100, 30);
             this.connectButton.Location = new Point(130, 400);
             this.connectButton.TabIndex = 24;
@@ -378,7 +390,7 @@ namespace AppRefiner.Dialogs
             this.loadingProgressBar.Visible = false;
 
             // DBConnectDialog
-            this.Text = "Connect to Database";
+            this.Text = windowTitle;
             this.ClientSize = new Size(400, 470);
             this.Controls.Add(this.headerPanel);
             this.Controls.Add(this.dbTypeLabel);

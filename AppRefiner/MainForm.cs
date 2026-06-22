@@ -71,6 +71,8 @@ namespace AppRefiner
         private AutoCompleteService? autoCompleteService; // Added AutoCompleteService
         private RefactorManager? refactorManager; // Added RefactorManager
         private SettingsService? settingsService; // Added SettingsService
+        private ComparisonConnectionService? comparisonConnectionService;
+        private EditorComparisonService? editorComparisonService;
         private FunctionCacheManager? functionCacheManager;
         private CommandManager? commandManager; // Added CommandManager for plugin commands
         private TypeExtensionManager? languageExtensionManager; // Added LanguageExtensionManager
@@ -94,6 +96,7 @@ namespace AppRefiner
         /// Gets the currently active AppDesigner process
         /// </summary>
         public AppDesignerProcess? ActiveAppDesigner => activeAppDesigner;
+        public ComparisonConnectionSession? ActiveComparisonConnection => activeComparisonConnection;
         /// <summary>
         /// Gets the language extension manager
         /// </summary>
@@ -170,6 +173,7 @@ namespace AppRefiner
 
         // Add a private field for the SnapshotManager
         private SnapshotManager? snapshotManager;
+        private ComparisonConnectionSession? activeComparisonConnection;
 
         // Fields for editor management
         private Dictionary<ScintillaEditor, DateTime> lastStylerProcessingTime = new();
@@ -220,6 +224,13 @@ namespace AppRefiner
 
         }
 
+        protected override void OnFormClosed(FormClosedEventArgs e)
+        {
+            activeComparisonConnection?.Dispose();
+            activeComparisonConnection = null;
+            base.OnFormClosed(e);
+        }
+
         protected override void OnLoad(EventArgs e)
         {
             base.OnLoad(e);
@@ -230,6 +241,8 @@ namespace AppRefiner
 
             // Instantiate and start services
             settingsService = new SettingsService(); // Instantiate SettingsService first
+            comparisonConnectionService = new ComparisonConnectionService();
+            editorComparisonService = new EditorComparisonService();
             dialogCenteringService = new DialogCenteringService(settingsService);
             applicationKeyboardService = new ApplicationKeyboardService();
             winEventService = new WinEventService();
@@ -1222,6 +1235,50 @@ namespace AppRefiner
             IntPtr ownerHandle = activeAppDesigner?.MainWindowHandle ?? this.Handle;
             using var dialog = new CheatsheetDialog(AvailableCommands, ownerHandle);
             dialog.ShowDialog(new WindowWrapper(ownerHandle));
+        }
+
+        public bool ConnectComparisonDatabase()
+        {
+            IntPtr ownerHandle = activeAppDesigner?.MainWindowHandle ?? this.Handle;
+            string? defaultDbName = activeComparisonConnection?.DatabaseName ?? activeAppDesigner?.DBName;
+
+            var session = comparisonConnectionService?.PromptForSession(ownerHandle, defaultDbName);
+            if (session == null)
+            {
+                return false;
+            }
+
+            activeComparisonConnection?.Dispose();
+            activeComparisonConnection = session;
+
+            Debug.Log($"ConnectComparisonDatabase: Connected comparison session to {session.DatabaseName}");
+            return true;
+        }
+
+        public bool DisconnectComparisonDatabase()
+        {
+            if (activeComparisonConnection == null)
+            {
+                Debug.Log("DisconnectComparisonDatabase: No active comparison connection");
+                return false;
+            }
+
+            Debug.Log($"DisconnectComparisonDatabase: Disconnecting comparison session from {activeComparisonConnection.DatabaseName}");
+            activeComparisonConnection.Dispose();
+            activeComparisonConnection = null;
+            return true;
+        }
+
+        public bool ShowComparisonDiffForActiveEditor()
+        {
+            if (activeEditor == null || activeComparisonConnection == null || editorComparisonService == null)
+            {
+                return false;
+            }
+
+            IntPtr ownerHandle = activeAppDesigner?.MainWindowHandle ?? this.Handle;
+            editorComparisonService.ShowDiffForEditor(activeEditor, activeComparisonConnection, ownerHandle);
+            return true;
         }
 
         private void HandleParamNamesToggle(bool enabled)

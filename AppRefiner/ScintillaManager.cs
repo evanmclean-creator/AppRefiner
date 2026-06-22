@@ -263,6 +263,7 @@ namespace AppRefiner
 
         private const int SCI_BEGINUNDOACTION = 2078;
         private const int SCI_ENDUNDOACTION = 2079;
+        private const int SCI_UNDO = 2176;
 
         private const int STYLE_DEFAULT = 32;
         private const int STYLE_CALLTIP = 38;
@@ -421,6 +422,16 @@ namespace AppRefiner
         {
             if (editor == null) return;
             editor.SendMessage(SCI_ENDUNDOACTION, IntPtr.Zero, IntPtr.Zero);
+        }
+
+        /// <summary>
+        /// Performs an undo action in the Scintilla editor.
+        /// </summary>
+        /// <param name="editor">The editor to undo in</param>
+        public static void Undo(ScintillaEditor editor)
+        {
+            if (editor == null) return;
+            editor.SendMessage(SCI_UNDO, IntPtr.Zero, IntPtr.Zero);
         }
 
         /// <summary>
@@ -1065,6 +1076,31 @@ namespace AppRefiner
             editor.SendMessage(SCI_SETSAVEPOINT, 0, 0);
 
             /* update local content hash */
+        }
+
+        internal static string NormalizeSqlForDiff(string sqlText)
+        {
+            if (string.IsNullOrWhiteSpace(sqlText))
+            {
+                return string.Empty;
+            }
+
+            try
+            {
+                var formatted = SqlFormatter.Of(Dialect.StandardSql)
+                    .Extend(cfg => cfg.PlusSpecialWordChars("%")
+                        .PlusNamedPlaceholderTypes(new string[] { ":" })
+                        .PlusOperators(new string[] { "%Concat" }))
+                    .Format(sqlText, formatConfig)
+                    .Replace("\n", " \n");
+
+                return formatted ?? sqlText;
+            }
+            catch (Exception ex)
+            {
+                Debug.Log($"NormalizeSqlForDiff: Error formatting SQL for diff: {ex.Message}");
+                return sqlText;
+            }
         }
 
         public static void SetSavePoint(ScintillaEditor editor, bool editorExpectingSave = false)
