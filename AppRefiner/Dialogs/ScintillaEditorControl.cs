@@ -53,9 +53,16 @@ namespace AppRefiner.Dialogs
         private const int SCI_SETFIRSTVISIBLELINE = 2613;
         private const int SCI_POINTYFROMPOSITION = 2165;
         private const int SCI_GETTEXTLENGTH = 2183;
+        private const int SCI_GETTEXT = 2182;
+        private const int SCI_SETMODEVENTMASK = 2359;
+        private const int SC_MOD_INSERTTEXT = 0x1;
+        private const int SC_MOD_DELETETEXT = 0x2;
 
         private const int WM_NOTIFY = 0x004E;
         private const int SCN_UPDATEUI = 2007;
+        private const int SCN_MODIFIED = 2008;
+        private const int WM_PARENTNOTIFY = 0x0210;
+        private const int WM_LBUTTONDOWN = 0x0201;
 
         // Win32 window styles
         private const int WS_CHILD = 0x40000000;
@@ -82,6 +89,9 @@ namespace AppRefiner.Dialogs
         [DllImport("user32.dll", CharSet = CharSet.Auto)]
         private static extern IntPtr SendMessage(IntPtr hWnd, int msg, IntPtr wParam, IntPtr lParam);
 
+        [DllImport("user32.dll")]
+        private static extern IntPtr SetFocus(IntPtr hWnd);
+
         // Scintilla exports a class-registration entry point used when the DLL is loaded for hosting.
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         private delegate int RegisterClassesDelegate(IntPtr hInstance);
@@ -95,11 +105,51 @@ namespace AppRefiner.Dialogs
         /// <summary>Raised on Scintilla SCN_UPDATEUI (scroll/caret/selection change) — used for scroll sync.</summary>
         public event EventHandler? ViewChanged;
 
+        /// <summary>Raised on Scintilla SCN_MODIFIED, restricted to text insert/delete (see the mod
+        /// event mask set in CreateScintilla) — used to drive debounced local-edit recompute.</summary>
+        public event EventHandler? TextModified;
+
         /// <summary>Last error encountered while loading/creating the Scintilla control, if any.</summary>
         public string? HostError { get; private set; }
 
         /// <summary>True if the native Scintilla child window was created successfully.</summary>
         public bool IsHosted => _sciHwnd != IntPtr.Zero;
+
+        public ScintillaEditorControl()
+        {
+            // Be a real focus participant so the dialog routes keyboard through this control
+            // (and not a previously-clicked button) when the Scintilla pane is active.
+            SetStyle(ControlStyles.Selectable, true);
+            TabStop = true;
+        }
+
+        protected override void OnGotFocus(EventArgs e)
+        {
+            base.OnGotFocus(e);
+            // This control can't render text itself — hand Win32 focus to the hosted Scintilla child.
+            if (_sciHwnd != IntPtr.Zero)
+            {
+                SetFocus(_sciHwnd);
+            }
+        }
+
+        protected override bool IsInputKey(Keys keyData)
+        {
+            // These belong to the Scintilla pane (newline, indent, caret movement) — don't let the
+            // dialog treat them as navigation keys and route them to a button.
+            switch (keyData & Keys.KeyCode)
+            {
+                case Keys.Enter:
+                case Keys.Tab:
+                case Keys.Up:
+                case Keys.Down:
+                case Keys.Left:
+                case Keys.Right:
+                    return true;
+                default:
+                    return base.IsInputKey(keyData);
+            }
+        }
 
         protected override void OnHandleCreated(EventArgs e)
         {
@@ -140,6 +190,17 @@ namespace AppRefiner.Dialogs
                 {
                     ViewChanged?.Invoke(this, EventArgs.Empty);
                 }
+                else if (code == SCN_MODIFIED)
+                {
+                    TextModified?.Invoke(this, EventArgs.Empty);
+                }
+            }
+            else if (m.Msg == WM_PARENTNOTIFY && (m.WParam.ToInt32() & 0xFFFF) == WM_LBUTTONDOWN)
+            {
+                // The Scintilla child was clicked. Make this the active WinForms control so the
+                // dialog stops routing keys (Enter) to a previously-focused button; OnGotFocus then
+                // forwards Win32 focus back to the child.
+                Focus();
             }
         }
 
@@ -172,6 +233,10 @@ namespace AppRefiner.Dialogs
             {
                 Send(SCI_SETMARGINWIDTHN, margin, 0);
             }
+
+            // Restrict SCN_MODIFIED to actual text insert/delete so the dialog's edit handler
+            // isn't woken by marker/annotation/style changes.
+            Send(SCI_SETMODEVENTMASK, SC_MOD_INSERTTEXT | SC_MOD_DELETETEXT, 0);
         }
 
         private static IntPtr EnsureScintillaLoaded()
@@ -297,6 +362,47 @@ namespace AppRefiner.Dialogs
         public void SetReadOnly(bool readOnly)
         {
             Send(SCI_SETREADONLY, readOnly ? 1 : 0, 0);
+        }
+
+        /// <summary>Gives keyboard focus to the hosted Scintilla pane. Needed after WinForms buttons
+        /// are clicked — otherwise the button keeps focus and Enter re-activates it instead of
+        /// inserting a newline. Sets this as the active WinForms control (so dialog key routing goes
+        /// through it) and hands Win32 focus to the Scintilla child.</summary>
+        public void FocusEditor()
+        {
+            Focus();
+            if (_sciHwnd != IntPtr.Zero)
+            {
+                SetFocus(_sciHwnd);
+            }
+        }
+
+        public string GetText()
+        {
+            if (_sciHwnd == IntPtr.Zero)
+            {
+                return string.Empty;
+            }
+
+            int byteLength = TextLength;
+            if (byteLength <= 0)
+            {
+                return string.Empty;
+            }
+
+            IntPtr buffer = Marshal.AllocHGlobal(byteLength + 1);
+            try
+            {
+                // SCI_GETTEXT copies up to (wParam - 1) bytes plus a null terminator.
+                SendMessage(_sciHwnd, SCI_GETTEXT, new IntPtr(byteLength + 1), buffer);
+                byte[] bytes = new byte[byteLength];
+                Marshal.Copy(buffer, bytes, 0, byteLength);
+                return Encoding.UTF8.GetString(bytes);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(buffer);
+            }
         }
 
         // --- Diff visuals (the ComparePlus / VS Code vocabulary, clean-room) ---

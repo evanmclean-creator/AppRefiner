@@ -35,7 +35,6 @@ namespace AppRefiner.Services
         public string RemoteDisplayText { get; init; } = string.Empty;
         public string RemoteRawText { get; init; } = string.Empty;
         public string Summary { get; init; } = string.Empty;
-        public bool AppliesWholeDocument { get; init; }
     }
 
     public sealed class ComparisonDiffViewModel
@@ -53,7 +52,6 @@ namespace AppRefiner.Services
         public List<ComparisonDiffRow> Rows { get; init; } = new();
         public List<ComparisonDiffHunk> Hunks { get; init; } = new();
         public OpenTargetType OpenTargetType { get; init; }
-        public bool UsesWholeDocumentApply => IsSqlNormalizedDisplay;
     }
 
     public enum ComparisonDiffActionStatus
@@ -153,37 +151,74 @@ namespace AppRefiner.Services
         private ComparisonDiffActionResult UpdateLocalText(ScintillaEditor editor, ComparisonDiffViewModel currentViewModel, string newText)
         {
             string currentText = ScintillaManager.GetScintillaText(editor) ?? string.Empty;
-            if (string.Equals(currentText, newText, StringComparison.Ordinal))
+            if (!string.Equals(currentText, newText, StringComparison.Ordinal))
             {
-                return RebuildFromTexts(
-                    editor.AppDesignerProcess.DBName ?? "Current",
-                    currentViewModel.RemoteSourceName,
-                    currentViewModel.OpenTargetType,
-                    editor.Caption,
-                    newText,
-                    currentViewModel.RemoteRawText,
-                    currentViewModel.OpenTarget);
+                try
+                {
+                    ScintillaManager.BeginUndoAction(editor);
+                    ScintillaManager.ReplaceTextRange(editor, 0, currentText.Length, newText);
+                }
+                finally
+                {
+                    ScintillaManager.EndUndoAction(editor);
+                }
+
+                editor.ContentString = ScintillaManager.GetScintillaText(editor);
             }
 
-            try
-            {
-                ScintillaManager.BeginUndoAction(editor);
-                ScintillaManager.ReplaceTextRange(editor, 0, currentText.Length, newText);
-            }
-            finally
-            {
-                ScintillaManager.EndUndoAction(editor);
-            }
-
-            editor.ContentString = ScintillaManager.GetScintillaText(editor);
-            return RebuildFromTexts(
+            // Recompute against the text the user actually typed, not a re-normalized version. For
+            // SQL this means edits show as-typed while editing (diffed against the still-normalized
+            // remote) instead of reflowing under the caret; a Refresh re-normalizes for a clean view.
+            return RebuildFromEditedLocal(
                 editor.AppDesignerProcess.DBName ?? "Current",
-                currentViewModel.RemoteSourceName,
-                currentViewModel.OpenTargetType,
+                currentViewModel,
                 editor.Caption,
-                editor.ContentString ?? newText,
-                currentViewModel.RemoteRawText,
-                currentViewModel.OpenTarget);
+                newText);
+        }
+
+        /// <summary>
+        /// Rebuilds the diff after a live local edit, treating the edited text as the local DISPLAY
+        /// text verbatim (no re-normalization) and reusing the previously computed remote display.
+        /// This keeps editing smooth — re-normalizing SQL on every keystroke would reformat the text
+        /// and move the caret. Use <see cref="RebuildFromTexts"/> (via Refresh) for a normalized view.
+        /// </summary>
+        private ComparisonDiffActionResult RebuildFromEditedLocal(
+            string localSourceName,
+            ComparisonDiffViewModel current,
+            string caption,
+            string localText)
+        {
+            string localDisplayText = localText;
+            string remoteDisplayText = current.RemoteDisplayText;
+
+            string title = $"Diff: {localSourceName} vs {current.RemoteSourceName} - {caption}";
+
+            var diffBuilder = new SideBySideDiffBuilder(new Differ());
+            var diff = diffBuilder.BuildDiffModel(localDisplayText, remoteDisplayText);
+
+            var rows = new List<ComparisonDiffRow>();
+            var hunks = BuildHunks(diff, rows, localDisplayText, remoteDisplayText, localText, current.RemoteRawText, current.IsSqlNormalizedDisplay);
+
+            return new ComparisonDiffActionResult
+            {
+                Status = ComparisonDiffActionStatus.Refreshed,
+                UpdatedModel = new ComparisonDiffViewModel
+                {
+                    Title = title,
+                    LocalSourceName = localSourceName,
+                    RemoteSourceName = current.RemoteSourceName,
+                    LocalRawText = localText,
+                    RemoteRawText = current.RemoteRawText,
+                    LocalDisplayText = localDisplayText,
+                    RemoteDisplayText = remoteDisplayText,
+                    OpenTarget = current.OpenTarget,
+                    IsSqlNormalizedDisplay = current.IsSqlNormalizedDisplay,
+                    HasDifferences = hunks.Count > 0,
+                    Rows = rows,
+                    Hunks = hunks,
+                    OpenTargetType = current.OpenTargetType
+                }
+            };
         }
 
         private ComparisonDiffActionResult ApplyHunk(
@@ -194,9 +229,10 @@ namespace AppRefiner.Services
         {
             var currentText = ScintillaManager.GetScintillaText(editor) ?? string.Empty;
 
-            bool stale = viewModel.IsSqlNormalizedDisplay
-                ? !string.Equals(ScintillaManager.NormalizeSqlForDiff(currentText), viewModel.LocalDisplayText, StringComparison.Ordinal)
-                : !string.Equals(currentText, viewModel.LocalRawText, StringComparison.Ordinal);
+            // The model's LocalRawText always tracks the editor's current content (raw at load,
+            // the edited text after a live edit), so a single ordinal check covers both PeopleCode
+            // and SQL — no normalization needed here.
+            bool stale = !string.Equals(currentText, viewModel.LocalRawText, StringComparison.Ordinal);
 
             if (stale)
             {
@@ -217,7 +253,14 @@ namespace AppRefiner.Services
 
                 if (viewModel.IsSqlNormalizedDisplay)
                 {
-                    ScintillaManager.ReplaceTextRange(editor, 0, currentText.Length, viewModel.RemoteRawText);
+                    // SQL display (normalized) doesn't map char-for-char to the raw editor, so apply
+                    // the hunk in display space and write the resulting full display text. Only the
+                    // hunk's content changes; App Designer re-canonicalizes formatting on save.
+                    string newDisplay =
+                        viewModel.LocalDisplayText.Substring(0, hunk.LocalDisplayStartIndex)
+                        + hunk.RemoteDisplayText
+                        + viewModel.LocalDisplayText.Substring(hunk.LocalDisplayEndIndex);
+                    ScintillaManager.ReplaceTextRange(editor, 0, currentText.Length, newDisplay);
                 }
                 else
                 {
@@ -351,7 +394,6 @@ namespace AppRefiner.Services
             int activeRemoteStartLine = 0;
             int activeLocalEndLine = 0;
             int activeRemoteEndLine = 0;
-            bool sqlApplyButtonAssigned = false;
 
             for (int rowIndex = 0; rowIndex < diff.OldText.Lines.Count; rowIndex++)
             {
@@ -392,25 +434,9 @@ namespace AppRefiner.Services
 
                 bool closesHunk = activeHunkId != null && (!changed || rowIndex == diff.OldText.Lines.Count - 1);
                 bool showButton = changed && activeHunkId != null && rowIndex == activeHunkStartRow;
-                string actionText = "Pull";
-
-                if (showButton && normalizeSqlForDisplay)
-                {
-                    if (sqlApplyButtonAssigned)
-                    {
-                        showButton = false;
-                        actionText = string.Empty;
-                    }
-                    else
-                    {
-                        sqlApplyButtonAssigned = true;
-                        actionText = "Pull All";
-                    }
-                }
-                else if (!showButton)
-                {
-                    actionText = string.Empty;
-                }
+                // One pull arrow per hunk for both PeopleCode and SQL (SQL apply is per-hunk in
+                // display space — see ApplyHunk — not a single whole-document replace).
+                string actionText = showButton ? "Pull" : string.Empty;
 
                 rows.Add(new ComparisonDiffRow
                 {
@@ -501,8 +527,7 @@ namespace AppRefiner.Services
                 LocalRawEndIndex = localRawEndIndex,
                 RemoteDisplayText = remoteDisplaySegment,
                 RemoteRawText = remoteRawSegment,
-                Summary = $"Lines {localStartLine + 1}-{Math.Max(localStartLine + 1, localEndLine)}",
-                AppliesWholeDocument = normalizeSqlForDisplay
+                Summary = $"Lines {localStartLine + 1}-{Math.Max(localStartLine + 1, localEndLine)}"
             };
         }
 

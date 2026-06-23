@@ -11,9 +11,12 @@ namespace AppRefiner.Dialogs
     /// ComparePlus and VS Code (see DIFF_TOOL.md §8). Per-hunk gutter arrows pull a hunk's
     /// comparison-side text into the local editor.
     ///
-    /// Pass 1 (step-4 spike): both panes are read-only; the goal is to confirm Scintilla hosts in our
-    /// dialog and that annotations/markers/indicators render. Live in-dialog local editing
-    /// (updateLocalText) is deferred to the next increment once hosting is confirmed.
+    /// The local (left) pane is editable; edits are debounced, pushed to the real App Designer
+    /// editor, and the diff is recomputed and re-decorated in place without reloading the pane (so
+    /// the caret/viewport stay put). The comparison (right) pane is always read-only. SQL panes show
+    /// normalized text at load/refresh; edits show as-typed (re-normalized only on the next Refresh,
+    /// since App Designer canonicalizes SQL formatting on save), and SQL applies use the whole-
+    /// definition path.
     /// </summary>
     public sealed class ComparisonDiffDialog : Form
     {
@@ -49,10 +52,13 @@ namespace AppRefiner.Dialogs
         private DialogHelper.ModalDialogMouseHandler? mouseHandler;
 
         private readonly Dictionary<int, Button> hunkButtons = new();
+        private readonly System.Windows.Forms.Timer editDebounceTimer;
 
         private ComparisonDiffViewModel model;
         private bool stylesConfigured;
         private bool syncingScroll;
+        private bool suppressEdits;
+        private bool pendingLocalEdit;
 
         public ComparisonDiffDialog(
             ComparisonDiffViewModel model,
@@ -82,6 +88,7 @@ namespace AppRefiner.Dialogs
             refreshButton = new Button();
             closeButton = new Button();
             toolTip = new ToolTip();
+            editDebounceTimer = new System.Windows.Forms.Timer { Interval = 250 };
 
             InitializeComponent();
         }
@@ -129,6 +136,8 @@ namespace AppRefiner.Dialogs
             rightPane.Dock = DockStyle.Fill;
             leftPane.ViewChanged += (_, _) => SyncFrom(leftPane, rightPane);
             rightPane.ViewChanged += (_, _) => SyncFrom(rightPane, leftPane);
+            leftPane.TextModified += LeftPane_TextModified;
+            editDebounceTimer.Tick += EditDebounceTimer_Tick;
 
             gutterPanel.Dock = DockStyle.Fill;
             gutterPanel.BackColor = Color.FromArgb(245, 245, 248);
@@ -214,7 +223,8 @@ namespace AppRefiner.Dialogs
             }
 
             ConfigureStyles();
-            BindModel(0);
+            BindModelFull(0);
+            leftPane.FocusEditor();
         }
 
         private void ConfigureStyles()
@@ -236,7 +246,44 @@ namespace AppRefiner.Dialogs
             stylesConfigured = true;
         }
 
-        private void BindModel(int preservedFirstVisibleLine)
+        /// <summary>
+        /// Full rebind: reloads both panes' text and re-decorates. Used for initial load, hunk
+        /// apply, refresh, and undo — cases where the document text itself changed. Resets the
+        /// caret (acceptable for those deliberate actions); local-edit recompute uses the surgical
+        /// path in <see cref="PushLocalEdit"/> instead so typing never reloads the pane.
+        /// </summary>
+        private void BindModelFull(int preservedFirstVisibleLine)
+        {
+            suppressEdits = true;
+            try
+            {
+                // Load the real (unpadded) document text into each pane; alignment is applied as
+                // annotations afterward so the underlying text stays pristine.
+                leftPane.SetText(model.LocalDisplayText);
+                rightPane.SetText(model.RemoteDisplayText);
+
+                // The local pane is editable for both PeopleCode and SQL. For SQL the panes show
+                // normalized text at load/refresh; edits show as-typed and only re-normalize on the
+                // next Refresh (App Designer canonicalizes SQL formatting on save regardless).
+                leftPane.SetReadOnly(false);
+                rightPane.SetReadOnly(true);
+
+                ApplyHeadersAndDecorations();
+
+                leftPane.SetFirstVisibleLine(preservedFirstVisibleLine);
+                rightPane.SetFirstVisibleLine(preservedFirstVisibleLine);
+                RepositionHunkButtons();
+            }
+            finally
+            {
+                suppressEdits = false;
+                pendingLocalEdit = false;
+            }
+        }
+
+        /// <summary>Updates headers/status and re-applies decorations + alignment to the current
+        /// pane text without touching that text — safe to call after a surgical local edit.</summary>
+        private void ApplyHeadersAndDecorations()
         {
             headerLabel.Text = model.Title;
             Text = model.Title;
@@ -248,28 +295,79 @@ namespace AppRefiner.Dialogs
                 ? $"{model.Hunks.Count} hunk(s) — click an arrow to pull the comparison side into the local editor."
                 : "No differences.";
 
-            // Load the real (unpadded) document text into each pane; alignment is applied as
-            // annotations afterward so the underlying text stays pristine.
-            leftPane.ClearAnnotations();
-            rightPane.ClearAnnotations();
-            leftPane.ClearLineMarkers(MARKER_ADDED);
-            leftPane.ClearLineMarkers(MARKER_REMOVED);
-            leftPane.ClearLineMarkers(MARKER_CHANGED);
-            rightPane.ClearLineMarkers(MARKER_ADDED);
-            rightPane.ClearLineMarkers(MARKER_REMOVED);
-            rightPane.ClearLineMarkers(MARKER_CHANGED);
-
-            leftPane.SetText(model.LocalDisplayText);
-            rightPane.SetText(model.RemoteDisplayText);
-            leftPane.SetReadOnly(true);
-            rightPane.SetReadOnly(true);
-
+            ClearDecorations(leftPane);
+            ClearDecorations(rightPane);
             ApplyDecorationsAndAlignment();
-
             RebuildGutterButtons();
-            leftPane.SetFirstVisibleLine(preservedFirstVisibleLine);
-            rightPane.SetFirstVisibleLine(preservedFirstVisibleLine);
             RepositionHunkButtons();
+        }
+
+        private static void ClearDecorations(ScintillaEditorControl pane)
+        {
+            pane.ClearAnnotations();
+            pane.ClearLineMarkers(MARKER_ADDED);
+            pane.ClearLineMarkers(MARKER_REMOVED);
+            pane.ClearLineMarkers(MARKER_CHANGED);
+            pane.ClearIndicatorRange(INDICATOR_CHANGE, 0, pane.TextLength);
+        }
+
+        private void LeftPane_TextModified(object? sender, EventArgs e)
+        {
+            // Programmatic SetText (during a full rebind) is wrapped in suppressEdits; ignore it.
+            if (suppressEdits)
+            {
+                return;
+            }
+
+            pendingLocalEdit = true;
+            editDebounceTimer.Stop();
+            editDebounceTimer.Start();
+        }
+
+        private void EditDebounceTimer_Tick(object? sender, EventArgs e)
+        {
+            editDebounceTimer.Stop();
+            if (suppressEdits || !leftPane.IsHosted)
+            {
+                return;
+            }
+
+            PushLocalEdit(redecorate: true);
+        }
+
+        /// <summary>
+        /// Pushes the local pane's current text to the real App Designer editor and recomputes the
+        /// diff. When <paramref name="redecorate"/> is true, re-applies decorations in place without
+        /// reloading the pane (preserving caret/viewport), falling back to a full rebind only if the
+        /// round-tripped text drifted from the pane (e.g. EOL normalization).
+        /// </summary>
+        private void PushLocalEdit(bool redecorate)
+        {
+            pendingLocalEdit = false;
+
+            string leftText = leftPane.GetText();
+            var result = updateLocalText(model, leftText);
+            if (result.UpdatedModel == null)
+            {
+                return;
+            }
+
+            model = result.UpdatedModel;
+
+            if (!redecorate)
+            {
+                return;
+            }
+
+            if (string.Equals(leftPane.GetText(), model.LocalDisplayText, StringComparison.Ordinal))
+            {
+                ApplyHeadersAndDecorations();
+                rightPane.SetFirstVisibleLine(leftPane.GetFirstVisibleLine());
+            }
+            else
+            {
+                BindModelFull(leftPane.GetFirstVisibleLine());
+            }
         }
 
         /// <summary>
@@ -409,12 +507,6 @@ namespace AppRefiner.Dialogs
 
             foreach (var hunk in model.Hunks)
             {
-                // SQL uses a single whole-document apply (normalized display); only show one arrow.
-                if (model.UsesWholeDocumentApply && hunk.Id > 1)
-                {
-                    continue;
-                }
-
                 Button button = new()
                 {
                     Width = 34,
@@ -430,9 +522,7 @@ namespace AppRefiner.Dialogs
 
                 button.FlatAppearance.BorderSize = 0;
                 button.Click += GutterButton_Click;
-                toolTip.SetToolTip(button, model.UsesWholeDocumentApply
-                    ? "Apply full comparison definition to local editor"
-                    : $"Pull hunk {hunk.Id} into local editor");
+                toolTip.SetToolTip(button, $"Pull hunk {hunk.Id} into local editor");
 
                 hunkButtons[hunk.Id] = button;
                 gutterPanel.Controls.Add(button);
@@ -505,6 +595,7 @@ namespace AppRefiner.Dialogs
 
         private void ApplyActionResult(ComparisonDiffActionResult result)
         {
+            editDebounceTimer.Stop();
             int preservedLine = leftPane.IsHosted ? leftPane.GetFirstVisibleLine() : 0;
 
             if (!string.IsNullOrWhiteSpace(result.Message))
@@ -516,7 +607,15 @@ namespace AppRefiner.Dialogs
             if (result.UpdatedModel != null)
             {
                 model = result.UpdatedModel;
-                BindModel(preservedLine);
+                BindModelFull(preservedLine);
+            }
+
+            // Return focus to the editable pane so Enter inserts a newline instead of re-clicking
+            // the button that was just pressed. Deferred so it runs after the click is fully
+            // processed (otherwise WinForms restores focus to the button afterward).
+            if (leftPane.IsHosted)
+            {
+                BeginInvoke(new Action(() => leftPane.FocusEditor()));
             }
         }
 
@@ -546,6 +645,17 @@ namespace AppRefiner.Dialogs
         protected override void OnFormClosed(FormClosedEventArgs e)
         {
             base.OnFormClosed(e);
+
+            editDebounceTimer.Stop();
+
+            // Flush any typing that hasn't been pushed to the editor yet (closing within the
+            // debounce window). Don't redecorate — the dialog is going away.
+            if (pendingLocalEdit && leftPane.IsHosted)
+            {
+                PushLocalEdit(redecorate: false);
+            }
+
+            editDebounceTimer.Dispose();
             mouseHandler?.Dispose();
             mouseHandler = null;
             foreach (var button in hunkButtons.Values)

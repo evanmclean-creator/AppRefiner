@@ -451,12 +451,16 @@ next item until verify passes.
       - [x] keep synchronized scrolling without tearing the view down on
         every change
       - [x] preserve per-hunk apply and grouped undo on top of that model
-      - [ ] **make local typing update the local document and recompute the
+      - [x] **make local typing update the local document and recompute the
         diff after a short debounce without rebinding the entire surface**
-        — deferred in the spike (both panes are currently read-only); this
-        is the main remaining behavior to restore. Make the local pane
-        editable, debounce edits, push to the real App Designer editor, and
-        re-diff in place.
+        — the local (left) pane is editable for both PeopleCode and SQL;
+        edits debounce (250ms), push to the real App Designer editor via
+        `updateLocalText`, and re-decorate in place (no pane reload,
+        caret/viewport preserved), with a full-rebind fallback only if
+        round-tripped text drifts (EOL). For SQL, panes are normalized at
+        load/refresh; edits show as-typed (not re-normalized mid-edit, which
+        would reflow under the caret) and re-normalize on the next Refresh —
+        safe because App Designer canonicalizes SQL formatting on save.
       - [ ] verify blank-annotation alignment counts are exactly right (watch
         for an off-by-one, especially the Scintilla line-0 annotation
         limitation noted in §8.1) and that intra-line indicator spans use
