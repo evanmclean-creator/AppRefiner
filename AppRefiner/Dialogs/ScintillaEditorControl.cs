@@ -26,6 +26,10 @@ namespace AppRefiner.Dialogs
         private const int SCI_STYLECLEARALL = 2050;
         private const int STYLE_DEFAULT = 32;
         private const int SCI_SETMARGINWIDTHN = 2242;
+        private const int SCI_SETMARGINTYPEN = 2240;
+        private const int SC_MARGIN_NUMBER = 1;
+        private const int STYLE_LINENUMBER = 33;
+        private const int SCI_TEXTWIDTH = 2276;
         private const int SCI_SETWRAPMODE = 2268;
         private const int SC_WRAP_NONE = 0;
 
@@ -48,6 +52,9 @@ namespace AppRefiner.Dialogs
         private const int SCI_INDICATORCLEARRANGE = 2505;
         private const int INDIC_ROUNDBOX = 7;
 
+        private const int SCI_STARTSTYLING = 2032;
+        private const int SCI_SETSTYLING = 2033;
+        private const int SCI_STYLESETFORE = 2051;
         private const int SCI_POSITIONFROMLINE = 2167;
         private const int SCI_GETFIRSTVISIBLELINE = 2152;
         private const int SCI_SETFIRSTVISIBLELINE = 2613;
@@ -229,7 +236,22 @@ namespace AppRefiner.Dialogs
             Send(SCI_SETCODEPAGE, SC_CP_UTF8, 0);
             SetMonospaceFont("Consolas", 10);
             Send(SCI_SETWRAPMODE, SC_WRAP_NONE, 0);
-            for (int margin = 0; margin < 5; margin++)
+
+            // Margin 0 = line numbers (width sized to ~5 digits in the current font); hide the rest.
+            // Alignment annotations aren't real document lines, so the blank gaps stay unnumbered.
+            Send(SCI_SETMARGINTYPEN, 0, SC_MARGIN_NUMBER);
+            IntPtr widthSample = Utf8ToHGlobal("_99999");
+            int lineNumberWidth;
+            try
+            {
+                lineNumberWidth = (int)SendMessage(_sciHwnd, SCI_TEXTWIDTH, new IntPtr(STYLE_LINENUMBER), widthSample);
+            }
+            finally
+            {
+                Marshal.FreeHGlobal(widthSample);
+            }
+            Send(SCI_SETMARGINWIDTHN, 0, lineNumberWidth > 0 ? lineNumberWidth : 44);
+            for (int margin = 1; margin < 5; margin++)
             {
                 Send(SCI_SETMARGINWIDTHN, margin, 0);
             }
@@ -403,6 +425,37 @@ namespace AppRefiner.Dialogs
             {
                 Marshal.FreeHGlobal(buffer);
             }
+        }
+
+        // --- Syntax styling (manual: we drive the styles ourselves, no Lexilla lexer) ---
+
+        public void DefineStyleColor(int styleNumber, Color foreground)
+        {
+            Send(SCI_STYLESETFORE, styleNumber, ColorToBgr(foreground));
+        }
+
+        /// <summary>Resets the whole document to the default style (call before re-applying ranges).</summary>
+        public void ResetStyling()
+        {
+            if (_sciHwnd == IntPtr.Zero)
+            {
+                return;
+            }
+
+            Send(SCI_STARTSTYLING, 0, 0);
+            Send(SCI_SETSTYLING, TextLength, 0);
+        }
+
+        /// <summary>Applies a style number to a byte range (positions are UTF-8 byte offsets).</summary>
+        public void StyleRange(int startByte, int lengthByte, int styleNumber)
+        {
+            if (_sciHwnd == IntPtr.Zero || lengthByte <= 0)
+            {
+                return;
+            }
+
+            Send(SCI_STARTSTYLING, startByte, 0);
+            Send(SCI_SETSTYLING, lengthByte, styleNumber);
         }
 
         // --- Diff visuals (the ComparePlus / VS Code vocabulary, clean-room) ---

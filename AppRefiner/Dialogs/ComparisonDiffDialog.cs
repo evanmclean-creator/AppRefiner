@@ -1,5 +1,7 @@
 using AppRefiner.Services;
 using DiffPlex.DiffBuilder.Model;
+using PeopleCodeParser.SelfHosted.Lexing;
+using PeopleCodeTypeInfo.Database;
 using System.Text;
 
 namespace AppRefiner.Dialogs
@@ -24,6 +26,26 @@ namespace AppRefiner.Dialogs
         private const int MARKER_REMOVED = 21;
         private const int MARKER_CHANGED = 22;
         private const int INDICATOR_CHANGE = 8;
+
+        // Syntax style numbers (0 = default/black). Matches Application Designer's scheme:
+        // keywords AND built-in functions blue, comments green, string literals red.
+        private const int STYLE_KEYWORD = 1;
+        private const int STYLE_COMMENT = 2;
+        private const int STYLE_STRING = 3;
+
+        private static readonly Color KeywordColor = Color.FromArgb(0, 0, 255);
+        private static readonly Color CommentColor = Color.FromArgb(0, 128, 0);
+        private static readonly Color StringColor = Color.FromArgb(200, 0, 0);
+
+        private static readonly HashSet<string> SqlKeywords = new(StringComparer.OrdinalIgnoreCase)
+        {
+            "SELECT", "FROM", "WHERE", "AND", "OR", "NOT", "NULL", "IS", "IN", "LIKE", "BETWEEN",
+            "ORDER", "BY", "GROUP", "HAVING", "DISTINCT", "AS", "JOIN", "LEFT", "RIGHT", "INNER",
+            "OUTER", "FULL", "CROSS", "ON", "UNION", "ALL", "INSERT", "INTO", "VALUES", "UPDATE",
+            "SET", "DELETE", "CREATE", "TABLE", "VIEW", "INDEX", "DROP", "ALTER", "EXISTS", "CASE",
+            "WHEN", "THEN", "ELSE", "END", "ASC", "DESC", "HAVING", "WITH", "USING", "MINUS",
+            "INTERSECT"
+        };
 
         private static readonly Color AddedColor = Color.FromArgb(232, 248, 232);
         private static readonly Color RemovedColor = Color.FromArgb(251, 232, 232);
@@ -241,6 +263,9 @@ namespace AppRefiner.Dialogs
                 pane.DefineLineMarker(MARKER_REMOVED, RemovedColor);
                 pane.DefineLineMarker(MARKER_CHANGED, ModifiedColor);
                 pane.DefineChangeIndicator(INDICATOR_CHANGE, ChangeIndicatorColor, 80);
+                pane.DefineStyleColor(STYLE_KEYWORD, KeywordColor);
+                pane.DefineStyleColor(STYLE_COMMENT, CommentColor);
+                pane.DefineStyleColor(STYLE_STRING, StringColor);
             }
 
             stylesConfigured = true;
@@ -297,9 +322,152 @@ namespace AppRefiner.Dialogs
 
             ClearDecorations(leftPane);
             ClearDecorations(rightPane);
+            Colorize(leftPane, model.LocalDisplayText);
+            Colorize(rightPane, model.RemoteDisplayText);
             ApplyDecorationsAndAlignment();
             RebuildGutterButtons();
             RepositionHunkButtons();
+        }
+
+        /// <summary>Applies App Designer-style syntax coloring to a pane (keywords/built-in functions
+        /// blue, comments green, strings red). PeopleCode uses our self-hosted lexer; SQL uses a small
+        /// scanner. Byte offsets assume ASCII for SQL, which PeopleCode/SQL effectively always is.</summary>
+        private void Colorize(ScintillaEditorControl pane, string text)
+        {
+            try
+            {
+                pane.ResetStyling();
+                if (string.IsNullOrEmpty(text))
+                {
+                    return;
+                }
+
+                if (model.IsSqlNormalizedDisplay)
+                {
+                    ColorizeSql(pane, text);
+                }
+                else
+                {
+                    ColorizePeopleCode(pane, text);
+                }
+            }
+            catch (Exception ex)
+            {
+                // Coloring is cosmetic — never let it break the diff.
+                Debug.Log($"ComparisonDiffDialog.Colorize: {ex.Message}");
+            }
+        }
+
+        private static void ColorizePeopleCode(ScintillaEditorControl pane, string text)
+        {
+            var tokens = new PeopleCodeLexer(text).TokenizeAll();
+            foreach (var token in tokens)
+            {
+                int style = StyleForPeopleCodeToken(token);
+                if (style == 0)
+                {
+                    continue;
+                }
+
+                int start = token.SourceSpan.Start.ByteIndex;
+                pane.StyleRange(start, token.SourceSpan.End.ByteIndex - start, style);
+            }
+        }
+
+        private static int StyleForPeopleCodeToken(Token token)
+        {
+            TokenType type = token.Type;
+            if (type.IsCommentType())
+            {
+                return STYLE_COMMENT;
+            }
+
+            if (type == TokenType.StringLiteral ||
+                type == TokenType.InterpStringStart ||
+                type == TokenType.InterpStringMid ||
+                type == TokenType.InterpStringEnd ||
+                type == TokenType.InterpStringUnterminated)
+            {
+                return STYLE_STRING;
+            }
+
+            if (type.IsKeyword())
+            {
+                return STYLE_KEYWORD;
+            }
+
+            // Built-in functions (GetSQL, CreateRecord, ...) render in the same blue as keywords.
+            // User methods/variables are not in the type database and stay default.
+            if (type == TokenType.GenericId && PeopleCodeTypeDatabase.GetFunction(token.Text) != null)
+            {
+                return STYLE_KEYWORD;
+            }
+
+            return 0;
+        }
+
+        private static void ColorizeSql(ScintillaEditorControl pane, string text)
+        {
+            int i = 0;
+            int n = text.Length;
+            while (i < n)
+            {
+                char c = text[i];
+
+                // Line comment: -- to end of line
+                if (c == '-' && i + 1 < n && text[i + 1] == '-')
+                {
+                    int start = i;
+                    i += 2;
+                    while (i < n && text[i] != '\n') i++;
+                    pane.StyleRange(start, i - start, STYLE_COMMENT);
+                    continue;
+                }
+
+                // Block comment: /* ... */
+                if (c == '/' && i + 1 < n && text[i + 1] == '*')
+                {
+                    int start = i;
+                    i += 2;
+                    while (i + 1 < n && !(text[i] == '*' && text[i + 1] == '/')) i++;
+                    i = i + 1 < n ? i + 2 : n;
+                    pane.StyleRange(start, i - start, STYLE_COMMENT);
+                    continue;
+                }
+
+                // String literal: '...' with '' as an escaped quote
+                if (c == '\'')
+                {
+                    int start = i;
+                    i++;
+                    while (i < n)
+                    {
+                        if (text[i] == '\'')
+                        {
+                            if (i + 1 < n && text[i + 1] == '\'') { i += 2; continue; }
+                            i++;
+                            break;
+                        }
+                        i++;
+                    }
+                    pane.StyleRange(start, i - start, STYLE_STRING);
+                    continue;
+                }
+
+                // Word: keyword if it matches the SQL keyword set
+                if (char.IsLetter(c) || c == '_')
+                {
+                    int start = i;
+                    while (i < n && (char.IsLetterOrDigit(text[i]) || text[i] == '_' || text[i] == '$' || text[i] == '#')) i++;
+                    if (SqlKeywords.Contains(text.Substring(start, i - start)))
+                    {
+                        pane.StyleRange(start, i - start, STYLE_KEYWORD);
+                    }
+                    continue;
+                }
+
+                i++;
+            }
         }
 
         private static void ClearDecorations(ScintillaEditorControl pane)

@@ -188,7 +188,9 @@ namespace AppRefiner.Services
             string caption,
             string localText)
         {
-            string localDisplayText = localText;
+            // Strip trailing newlines so the comparison stays trailing-insensitive (matches
+            // RebuildFromTexts); remote display is already stripped from the prior build.
+            string localDisplayText = StripTrailingNewlines(localText);
             string remoteDisplayText = current.RemoteDisplayText;
 
             string title = $"Diff: {localSourceName} vs {current.RemoteSourceName} - {caption}";
@@ -229,10 +231,13 @@ namespace AppRefiner.Services
         {
             var currentText = ScintillaManager.GetScintillaText(editor) ?? string.Empty;
 
-            // The model's LocalRawText always tracks the editor's current content (raw at load,
-            // the edited text after a live edit), so a single ordinal check covers both PeopleCode
-            // and SQL — no normalization needed here.
-            bool stale = !string.Equals(currentText, viewModel.LocalRawText, StringComparison.Ordinal);
+            // The model's LocalRawText tracks the editor's content; compare trailing-insensitively so
+            // a difference of only trailing newlines (editor buffer vs DB text) isn't treated as a
+            // stale edit.
+            bool stale = !string.Equals(
+                StripTrailingNewlines(currentText),
+                StripTrailingNewlines(viewModel.LocalRawText),
+                StringComparison.Ordinal);
 
             if (stale)
             {
@@ -342,8 +347,11 @@ namespace AppRefiner.Services
             OpenTarget? openTarget)
         {
             bool normalizeSqlForDisplay = openTargetType == OpenTargetType.SQL;
-            string localDisplayText = normalizeSqlForDisplay ? ScintillaManager.NormalizeSqlForDiff(localRawText) : localRawText;
-            string remoteDisplayText = normalizeSqlForDisplay ? ScintillaManager.NormalizeSqlForDiff(remoteRawText) : remoteRawText;
+            // Strip trailing newlines from the display text so a trailing-blank-line mismatch between
+            // the editor buffer and the DB copy doesn't show as a phantom diff at end-of-file. Raw
+            // text is left intact for apply; the staleness check is trailing-insensitive.
+            string localDisplayText = StripTrailingNewlines(normalizeSqlForDisplay ? ScintillaManager.NormalizeSqlForDiff(localRawText) : localRawText);
+            string remoteDisplayText = StripTrailingNewlines(normalizeSqlForDisplay ? ScintillaManager.NormalizeSqlForDiff(remoteRawText) : remoteRawText);
 
             string title = $"Diff: {localSourceName} vs {remoteSourceName} - {caption}";
 
@@ -529,6 +537,11 @@ namespace AppRefiner.Services
                 RemoteRawText = remoteRawSegment,
                 Summary = $"Lines {localStartLine + 1}-{Math.Max(localStartLine + 1, localEndLine)}"
             };
+        }
+
+        private static string StripTrailingNewlines(string text)
+        {
+            return string.IsNullOrEmpty(text) ? string.Empty : text.TrimEnd('\r', '\n');
         }
 
         private static bool IsChanged(ChangeType changeType)

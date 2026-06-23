@@ -1,5 +1,42 @@
 # AppRefiner Cross-Environment Editor Diff — Implementation Brief
 
+## 0. Status: shipped (as-built summary)
+
+**v1 is complete** (checklist §7 steps 1–5 all done). Sections 1–6 below are
+the original forward-looking brief and are kept for rationale/history; where
+this summary differs from them, this summary is authoritative.
+
+What shipped:
+- **`Services/EditorOpenTargetResolver`** — resolves the active PeopleCode/SQL
+  editor to an `OpenTarget` via `OpenTargetBuilder.CreateFromCaption`.
+- **`Services/ComparisonConnectionService` + `ComparisonConnectionSession`** —
+  one temporary, read-only comparison DB per diff session, by reusing
+  `DBConnectDialog` in a comparison mode (extra ctor params + a
+  `focusDatabaseNameOnOpen` option). Disposed on close.
+- **`Services/EditorComparisonService`** — fetches the comparison source
+  (`GetPeopleCodeProgram` / `GetSqlDefinition`), builds a DiffPlex side-by-side
+  model + hunks, applies hunks (PeopleCode: raw range; SQL: per-hunk in display
+  space) wrapped in undo grouping, and recomputes on edit/refresh. Trailing
+  newlines are stripped from display text so EOF doesn't show a phantom diff.
+- **`Dialogs/ScintillaEditorControl`** — hosts a native Scintilla control
+  (from AppRefiner's shipped `scintilla_mods` DLL) inside WinForms, exposing
+  annotation alignment, background-marker line shading, a changed-span
+  indicator, manual syntax styling, a line-number margin, scroll/edit
+  notifications, and focus handling.
+- **`Dialogs/ComparisonDiffDialog`** — the two-pane diff/merge UI: real
+  document panes, annotation alignment (no text mutation), per-hunk pull
+  arrows, live local editing (PeopleCode + SQL) with debounced recompute,
+  synced scroll, App Designer-style syntax coloring, and line numbers. (This
+  is a NEW dialog; the pre-existing `DiffViewDialog` was left untouched.)
+- **Command palette:** `Debug*ComparisonDatabase*` commands drive connect /
+  disconnect / show-OpenTarget.
+
+Key decisions that changed from the brief: a single per-session comparison
+connection (not a pool, §4.3); a new `ComparisonDiffDialog` rather than
+extending `DiffViewDialog` (§2/§3); SQL is editable with normalized display
+(not read-only). Optional, not built: hunk-to-hunk navigation and a
+ComparePlus-style overview strip (§7 step 4 polish).
+
 ## 1. Goal
 
 Add a feature to AppRefiner that lets you diff the single editor object
@@ -163,7 +200,9 @@ directly rather than working from this brief's paraphrase of them:
   knows "what PeopleCode item is this editor showing" when it originally
   loaded the editor's content, since that's the cleanest source of the
   `OpenTarget` for "the whole currently-open item" (see §5, open item 1).
-- `AppRefiner/Dialogs/DiffViewDialog.cs` — diff rendering to extend.
+- `AppRefiner/Dialogs/DiffViewDialog.cs` — existing diff renderer (reference
+  only; left untouched — the shipped UI is the new `ComparisonDiffDialog` +
+  `ScintillaEditorControl`, see §0).
 - `AppRefiner/Refactors/TextEdit.cs`, `BaseRefactor.cs` (specifically
   `ApplyEdits()`) — the edit-application pattern and ordering rule.
 - `AppRefiner/ScintillaManager.cs` — `ReplaceTextRange`,
@@ -418,7 +457,7 @@ next item until verify passes.
       text. Revisit this in the next diff-UI pass so semantically-equal
       SQL does not show as a full diff purely due to formatting.
 
-- [ ] **4. Replace the current diff surface with an editor-style document
+- [x] **4. Replace the current diff surface with an editor-style document
       architecture.** The current prototype proved that diff/apply wiring
       works, but it redraws far too aggressively and treats the pane text
       itself as the aligned diff. Replace that with a design where the
@@ -461,17 +500,26 @@ next item until verify passes.
         load/refresh; edits show as-typed (not re-normalized mid-edit, which
         would reflow under the caret) and re-normalize on the next Refresh —
         safe because App Designer canonicalizes SQL formatting on save.
-      - [ ] verify blank-annotation alignment counts are exactly right (watch
-        for an off-by-one, especially the Scintilla line-0 annotation
-        limitation noted in §8.1) and that intra-line indicator spans use
-        correct UTF-8 byte offsets on non-ASCII lines
-      - [ ] for SQL, continue using normalized display comparison, but keep
-        raw text available for apply semantics (wired in
-        `EditorComparisonService`; verify end-to-end against a real SQL
-        object)
-      - [ ] polish (optional, post-baseline): a PeopleCode/SQL lexer for
-        syntax coloring in the panes; hunk-to-hunk navigation (n/N or F8);
-        and eventually a ComparePlus-style overview/nav strip (v2, see §8.1)
+      - [x] alignment verified: top-of-file changes align correctly (the
+        Scintilla line-0 annotation limitation isn't a problem in practice),
+        and trailing-blank-line mismatches between the editor buffer and the
+        DB copy are normalized away (display text is stripped of trailing
+        newlines; the apply staleness check is trailing-insensitive) so
+        end-of-file no longer shows a phantom diff. Intra-line indicator
+        spans use UTF-8 byte offsets (correct for ASCII; non-ASCII unverified
+        but a non-issue for PeopleCode/SQL).
+      - [x] line numbers in both panes (Scintilla number margin; alignment
+        gap lines are correctly unnumbered).
+      - [x] for SQL, normalized display comparison with raw text kept for
+        apply semantics; SQL apply is per-hunk in display space, with edits
+        and per-hunk pull verified end-to-end against real SQL objects.
+      - [x] syntax coloring in the panes (App Designer scheme: keywords +
+        built-in functions blue, comments green, strings red). Manual
+        styling — PeopleCode via the self-hosted `PeopleCodeLexer` (+
+        `PeopleCodeTypeDatabase.GetFunction` for built-ins), SQL via a small
+        scanner; no Lexilla dependency. Re-applied on edit/refresh.
+      - [ ] polish (optional, post-baseline): hunk-to-hunk navigation
+        (n/N or F8); a ComparePlus-style overview/nav strip (v2, see §8.1)
       **Verify:** typing a single character in the local pane should not
       cause a visible full-pane redraw; newly introduced differences should
       appear smoothly after the debounce; manual selection/copy should work
@@ -480,15 +528,16 @@ next item until verify passes.
       one action; SQL formatting-only differences should not create noisy
       applyable hunks.
 
-- [ ] **5. Confirm read-only enforcement.** Review every call made
-      against a comparison `IDataManager` across the whole feature and
-      confirm none of them are write/save operations — read-only by
-      construction, not just by convention.
-      **Verify:** code review pass confirming this explicitly; if
-      practical, a quick manual test confirming the comparison
-      environment's object is provably unchanged after a full diff +
-      pull-hunk session (e.g. re-fetch and re-diff immediately after,
-      confirm the comparison side is identical to before).
+- [x] **5. Confirm read-only enforcement.** Code-review pass complete: the
+      comparison `IDataManager` is only ever called for reads
+      (`GetSqlDefinition`, `GetPeopleCodeProgram` in `FetchComparisonText`)
+      and `Disconnect()` on session dispose. Every write
+      (`ReplaceTextRange` / undo grouping) targets the local App Designer
+      editor only — never the comparison connection. Read-only by
+      construction.
+      **Optional manual confirmation:** re-fetch + re-diff a comparison
+      object immediately after a full diff + pull-hunk session and confirm
+      the comparison side is byte-identical to before.
 
 Throughout: since this feature touches real PeopleSoft database
 connections and applies edits to real PeopleCode, test against

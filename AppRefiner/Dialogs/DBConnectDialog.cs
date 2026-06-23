@@ -93,6 +93,7 @@ namespace AppRefiner.Dialogs
         private bool isConnecting = false;
         private bool isInitialLoad = true;
         private readonly string headerTitle;
+        private readonly bool focusDatabaseNameOnOpen;
         private readonly string windowTitle;
         private readonly string connectButtonTitle;
 
@@ -106,7 +107,8 @@ namespace AppRefiner.Dialogs
             string? defaultDbName = null,
             string headerTitle = "Database Connection",
             string windowTitle = "Connect to Database",
-            string connectButtonText = "Connect")
+            string connectButtonText = "Connect",
+            bool focusDatabaseNameOnOpen = false)
         {
             this.headerPanel = new Panel();
             this.headerLabel = new Label();
@@ -141,6 +143,7 @@ namespace AppRefiner.Dialogs
             this.headerTitle = headerTitle;
             this.windowTitle = windowTitle;
             this.connectButtonTitle = connectButtonText;
+            this.focusDatabaseNameOnOpen = focusDatabaseNameOnOpen;
 
             // Load saved settings
             LoadAllSettings();
@@ -839,8 +842,19 @@ namespace AppRefiner.Dialogs
                 mouseHandler = new DialogHelper.ModalDialogMouseHandler(this, headerPanel, owner);
             }
 
-            // Set focus to password field if settings were loaded
-            if (settingsLoaded && !string.IsNullOrEmpty(usernameTextBox.Text))
+            // The diff flow wants to type a comparison DB name immediately, so focus + select that
+            // field. Otherwise keep the default: focus the password field when a saved connection
+            // loaded (so you just type the password).
+            if (focusDatabaseNameOnOpen)
+            {
+                this.BeginInvoke(new Action(() =>
+                {
+                    dbNameComboBox.Focus();
+                    dbNameComboBox.SelectionStart = 0;
+                    dbNameComboBox.SelectionLength = dbNameComboBox.Text.Length;
+                }));
+            }
+            else if (settingsLoaded && !string.IsNullOrEmpty(usernameTextBox.Text))
             {
                 this.BeginInvoke(new Action(() => passwordTextBox.Focus()));
             }

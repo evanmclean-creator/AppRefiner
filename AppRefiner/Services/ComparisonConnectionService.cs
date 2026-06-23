@@ -16,7 +16,8 @@ namespace AppRefiner.Services
                 defaultDbName,
                 headerTitle: "Comparison Database",
                 windowTitle: "Connect Comparison Database",
-                connectButtonText: "Connect");
+                connectButtonText: "Connect",
+                focusDatabaseNameOnOpen: true);
 
             dialog.StartPosition = FormStartPosition.CenterParent;
 
